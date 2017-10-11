@@ -23,7 +23,7 @@ then
     cd ${SRC_PATH}
     CHANGED_FILES=$(git diff --name-only origin/master | grep ".cpp$")
     CHANGED_FILES=$(echo ${CHANGED_FILES} | awk -v var=${PWD} '{printf("%s/%s\n", var, $1)}')
-    FILES=$(comm -12 <(echo "${FILES}") <(echo "${CHANGED_FILES}"))
+    FILES=$(comm -12 <(echo "${FILES}" | sort) <(echo "${CHANGED_FILES}" | sort))
     cd -
 fi
 
