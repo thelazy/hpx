@@ -3,6 +3,17 @@
 # Distributed under the Boost Software License, Version 1.0. (See accompanying
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
+if(CMAKE_COMPILER_IS_GNUCXX)
+  set(HPX_HAVE_SYNTAX_ONLY_FLAG TRUE)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(HPX_HAVE_SYNTAX_ONLY_FLAG TRUE)
+endif()
+
+if (HPX_HAVE_SYNTAX_ONLY_FLAG)
+  hpx_option(HPX_WITH_TESTS_HEADERS_SYNTAX_ONLY BOOL
+    "Use -fsyntax-only for building HPX header tests (Internal Only)(default: OFF)" OFF ADVANCED)
+endif()
+
 # collect a list of all header files in the source tree
 file(GLOB_RECURSE headers "${PROJECT_SOURCE_DIR}/hpx/*hpp")
 
@@ -39,8 +50,40 @@ if(HPX_WITH_PAPI)
   include_directories(${PAPI_INCLUDE_DIR})
 endif()
 
-# make sure #including 'hpx/config/autolink.hpp' does not cause errors
-hpx_add_compile_flag(-DHPX_AUTOLINK_LIB_NAME=hpx)
+# Use lightweight compilation mode if available
+if(HPX_WITH_TESTS_HEADERS_SYNTAX_ONLY AND HPX_HAVE_SYNTAX_ONLY_FLAG)
+  string(TOUPPER "CMAKE_CXX_FLAGS_${CMAKE_BUILD_TYPE}" name)
+  set(GCC_FLAGS "${${name}} ${CMAKE_CXX_FLAGS} -fsyntax-only")
+
+  get_property(value GLOBAL PROPERTY HPX_TARGET_COMPILE_OPTIONS)
+  if (value)
+    foreach(item ${value})
+      set(GCC_FLAGS "${GCC_FLAGS} ${item}")
+    endforeach()
+  endif()
+
+  get_directory_property(value COMPILE_DEFINITIONS)
+  if (value)
+    foreach(item ${value})
+      set(GCC_FLAGS "${GCC_FLAGS} -D${item}")
+    endforeach()
+  endif()
+
+  get_directory_property(value INCLUDE_DIRECTORIES)
+  if (value)
+    foreach(item ${value})
+      set(GCC_FLAGS "${GCC_FLAGS} -I${item}")
+    endforeach()
+  endif()
+
+  # make sure #including 'hpx/config/autolink.hpp' does not cause errors
+  set(GCC_FLAGS "${GCC_FLAGS} -DHPX_AUTOLINK_LIB_NAME=hpx")
+
+  separate_arguments(GCC_FLAGS)
+else()
+  # make sure #including 'hpx/config/autolink.hpp' does not cause errors
+  hpx_add_compile_flag(-DHPX_AUTOLINK_LIB_NAME=hpx)
+endif()
 
 # for each of the found headers, generate a test executable
 foreach(header ${headers})
@@ -53,17 +96,38 @@ foreach(header ${headers})
     # extract relative path of header
     string(REGEX REPLACE "${PROJECT_SOURCE_DIR}/hpx/" "" relpath "${header}")
 
-    # .hpp --> .cpp
-    string(REGEX REPLACE ".hpp" ".cpp" full_test_file "${relpath}")
+    # remove extension, '/' --> '_'
+    string(REGEX REPLACE ".hpp" "_hpp" test_file "${relpath}")
+    string(REGEX REPLACE "/" "_" test_name "${test_file}")
 
     # exclude marked files
     set(detail_pos -1)
     list(FIND exclude_from_headers "${relpath}" detail_pos)
     if(${detail_pos} EQUAL -1)
+      set(all_headers ${all_headers} "#include <hpx/${relpath}>\n")
+    endif()
 
-      # remove extension, '/' --> '_'
-      string(REGEX REPLACE ".hpp" "_hpp" test_file "${relpath}")
-      string(REGEX REPLACE "/" "_" test_name "${test_file}")
+    # exclude from all files
+    set(detail_pos -1)
+    list(FIND exclude_from_all_headers "${relpath}" detail_pos)
+    if(${detail_pos} EQUAL -1)
+      set(all_headers ${all_headers} "#include <hpx/${relpath}>\n")
+    endif()
+
+    if(HPX_WITH_TESTS_HEADERS_SYNTAX_ONLY)
+      # add compile only test
+      add_custom_target(
+        tests.headers.${test_name}
+        COMMAND ${CMAKE_CXX_COMPILER} ${GCC_FLAGS} ${header}
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        SOURCES ${header}
+        VERBATIM)
+
+      # make pseudo-targets depend on master pseudo-target
+      add_hpx_pseudo_dependencies(tests.headers tests.headers.${test_name})
+    else()
+      # .hpp --> .cpp
+      string(REGEX REPLACE ".hpp" ".cpp" full_test_file "${relpath}")
 
       # generate the test
       file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/${full_test_file}
@@ -71,13 +135,6 @@ foreach(header ${headers})
         "#ifndef HPX_MAIN_DEFINED\n"
         "int main(int argc, char** argv) { return 0; }\n"
         "#endif\n")
-
-      # exclude from all files
-      set(detail_pos -1)
-      list(FIND exclude_from_all_headers "${relpath}" detail_pos)
-      if(${detail_pos} EQUAL -1)
-        set(all_headers ${all_headers} "#include <hpx/${relpath}>\n")
-      endif()
 
       get_filename_component(header_dir "${relpath}" DIRECTORY)
 
@@ -98,7 +155,6 @@ foreach(header ${headers})
       # add dependencies to pseudo-target
       add_hpx_pseudo_dependencies(tests.headers.${test_name} "${test_name}_lib")
     endif()
-
   endif()
 
 endforeach()
