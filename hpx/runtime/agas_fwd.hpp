@@ -8,10 +8,14 @@
 #define HPX_RUNTIME_AGAS_FWD_HPP
 
 #include <hpx/config.hpp>
-#include <hpx/runtime/components/component_type.hpp>
 #include <hpx/util/function.hpp>
 
 #include <string>
+
+namespace hpx { namespace components
+{
+    typedef std::int32_t component_type;
+}}
 
 namespace hpx { namespace agas
 {
