@@ -60,9 +60,12 @@ namespace hpx { namespace parcelset { namespace policies { namespace tcp
             );
     }
 
-    connection_handler::connection_handler(util::runtime_configuration const& ini,
-            util::function_nonser<void(std::size_t, char const*)> const& on_start_thread,
-            util::function_nonser<void()> const& on_stop_thread)
+    connection_handler::connection_handler(
+        util::runtime_configuration const& ini,
+        util::function_nonser<void(std::size_t, char const*)> const&
+            on_start_thread,
+        util::function_nonser<void(std::size_t, char const*)> const&
+            on_stop_thread)
       : base_type(ini, parcelport_address(ini), on_start_thread, on_stop_thread)
       , acceptor_(nullptr)
     {
@@ -206,6 +209,9 @@ namespace hpx { namespace parcelset { namespace policies { namespace tcp
             std::ostringstream strm;
             strm << error.message() << " (while trying to connect to: "
                   << l << ")";
+
+            if (tolerate_node_faults())
+                return sender_connection;
 
             HPX_THROWS_IF(ec, network_error,
                 "tcp::connection_handler::get_connection",

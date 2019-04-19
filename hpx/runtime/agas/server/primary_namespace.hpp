@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 //  Copyright (c) 2011 Bryce Adelstein-Lelbach
-//  Copyright (c) 2012-2016 Hartmut Kaiser
+//  Copyright (c) 2012-2019 Hartmut Kaiser
 //  Copyright (c) 2016 Thomas Heller
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -21,6 +21,7 @@
 #include <hpx/runtime/naming/name.hpp>
 #include <hpx/traits/action_message_handler.hpp>
 #include <hpx/traits/action_serialization_filter.hpp>
+#include <hpx/util/internal_allocator.hpp>
 #include <hpx/util/tuple.hpp>
 
 #include <atomic>
@@ -108,11 +109,6 @@ char const* const primary_namespace_service_name = "primary/";
 ///     00000001000000010000000000000004
 ///         Address of the locality_namespace component on the bootstrap AGAS
 ///         locality.
-///     00000001000000010000000000000005
-///         Address of the root-CA component
-///     xxxxxxxx000000010000000000000006
-///         Address of the locality based sub-CA, xxxxxxxx is replaced with the
-///         correct locality id
 ///
 struct HPX_EXPORT primary_namespace
   : components::fixed_component_base<primary_namespace>
@@ -140,7 +136,7 @@ struct HPX_EXPORT primary_namespace
     refcnt_table_type refcnts_;
     typedef std::map<
             naming::gid_type,
-            hpx::util::tuple<bool, std::size_t, lcos::local::condition_variable_any>
+            hpx::util::tuple<bool, std::size_t, lcos::local::detail::condition_variable>
         > migration_table_type;
 
     std::string instance_name_;
@@ -162,14 +158,15 @@ struct HPX_EXPORT primary_namespace
             api_counter_data()
               : count_(0)
               , time_(0)
+              , enabled_(false)
             {}
 
             std::atomic<std::int64_t> count_;
             std::atomic<std::int64_t> time_;
+            bool enabled_;
         };
 
-        counter_data()
-        {}
+        counter_data() = default;
 
     public:
         // access current counter values
@@ -205,6 +202,8 @@ struct HPX_EXPORT primary_namespace
         void increment_allocate_count();
         void increment_begin_migration_count();
         void increment_end_migration_count();
+
+        void enable_all();
 
     private:
         friend struct primary_namespace;
@@ -339,17 +338,21 @@ struct HPX_EXPORT primary_namespace
         naming::gid_type locality_;
     };
 
+    using free_entry_allocator_type = util::internal_allocator<free_entry>;
+    using free_entry_list_type =
+        std::list<free_entry, free_entry_allocator_type>;
+
     void resolve_free_list(
         std::unique_lock<mutex_type>& l
       , std::list<refcnt_table_type::iterator> const& free_list
-      , std::list<free_entry>& free_entry_list
+      , free_entry_list_type& free_entry_list
       , naming::gid_type const& lower
       , naming::gid_type const& upper
       , error_code& ec
         );
 
     void decrement_sweep(
-        std::list<free_entry>& free_list
+        free_entry_list_type& free_list
       , naming::gid_type const& lower
       , naming::gid_type const& upper
       , std::int64_t credits
@@ -357,7 +360,7 @@ struct HPX_EXPORT primary_namespace
         );
 
     void free_components_sync(
-        std::list<free_entry>& free_list
+        free_entry_list_type& free_list
       , naming::gid_type const& lower
       , naming::gid_type const& upper
       , error_code& ec
@@ -366,8 +369,8 @@ struct HPX_EXPORT primary_namespace
   public:
     HPX_DEFINE_COMPONENT_ACTION(primary_namespace, allocate);
     HPX_DEFINE_COMPONENT_ACTION(primary_namespace, bind_gid);
-    HPX_DEFINE_COMPONENT_ACTION(primary_namespace, begin_migration);
     HPX_DEFINE_COMPONENT_ACTION(primary_namespace, colocate);
+    HPX_DEFINE_COMPONENT_ACTION(primary_namespace, begin_migration);
     HPX_DEFINE_COMPONENT_ACTION(primary_namespace, end_migration);
     HPX_DEFINE_COMPONENT_ACTION(primary_namespace, decrement_credit);
     HPX_DEFINE_COMPONENT_ACTION(primary_namespace, increment_credit);
@@ -486,6 +489,7 @@ HPX_REGISTER_BASE_LCO_WITH_VALUE_DECLARATION(
 
 namespace hpx { namespace traits
 {
+#if !defined(HPX_COMPUTE_DEVICE_CODE)
     // Parcel routing forwards the message handler request to the routed action
     template <>
     struct action_message_handler<agas::server::primary_namespace::route_action>
@@ -511,6 +515,7 @@ namespace hpx { namespace traits
             return agas::server::primary_namespace::get_serialization_filter(p);
         }
     };
+#endif
 }}
 
 #include <hpx/config/warnings_suffix.hpp>

@@ -5,9 +5,11 @@
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 #include <hpx/config.hpp>
+#include <hpx/lcos/local/packaged_continuation.hpp>
 #include <hpx/performance_counters/base_performance_counter.hpp>
 #include <hpx/performance_counters/counters.hpp>
 #include <hpx/performance_counters/counter_creators.hpp>
+#include <hpx/performance_counters/counter_parser.hpp>
 #include <hpx/performance_counters/manage_counter_type.hpp>
 #include <hpx/performance_counters/registry.hpp>
 #include <hpx/runtime.hpp>
@@ -16,24 +18,14 @@
 #include <hpx/runtime/components/stubs/runtime_support.hpp>
 #include <hpx/runtime/thread_pool_helpers.hpp>
 #include <hpx/runtime/get_num_localities.hpp>
+#include <hpx/runtime/serialization/base_object.hpp>
+#include <hpx/runtime/serialization/serialize.hpp>
+#include <hpx/runtime/serialization/vector.hpp>
 #include <hpx/util/assert.hpp>
+#include <hpx/util/bind_front.hpp>
 #include <hpx/util/format.hpp>
 #include <hpx/util/function.hpp>
-
-#include <hpx/util/bind.hpp>
 #include <hpx/util/safe_lexical_cast.hpp>
-#include <hpx/lcos/local/packaged_continuation.hpp>
-
-#define BOOST_SPIRIT_USE_PHOENIX_V3
-#include <boost/spirit/include/qi_char.hpp>
-#include <boost/spirit/include/qi_nonterminal.hpp>
-#include <boost/spirit/include/qi_numeric.hpp>
-#include <boost/spirit/include/qi_operator.hpp>
-#include <boost/spirit/include/qi_parse.hpp>
-#include <boost/spirit/include/qi_string.hpp>
-#include <boost/spirit/include/qi_auxiliary.hpp>
-#include <boost/spirit/include/qi_directive.hpp>
-#include <boost/fusion/include/adapt_struct.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -288,110 +280,6 @@ namespace hpx { namespace performance_counters
         return status_valid_data;
     }
 
-    ///////////////////////////////////////////////////////////////////////////
-    struct instance_name
-    {
-        instance_name() : basename_(false) {}
-
-        std::string name_;
-        std::string index_;
-        bool basename_;
-    };
-
-    struct instance_elements
-    {
-        instance_name parent_;
-        instance_name child_;
-        instance_name subchild_;
-    };
-
-    struct path_elements
-    {
-        std::string object_;
-        instance_elements instance_;
-        std::string counter_;
-        std::string parameters_;
-    };
-}}
-
-BOOST_FUSION_ADAPT_STRUCT(
-    hpx::performance_counters::instance_name,
-    (std::string, name_)
-    (std::string, index_)
-    (bool, basename_)
-)
-
-BOOST_FUSION_ADAPT_STRUCT(
-    hpx::performance_counters::instance_elements,
-    (hpx::performance_counters::instance_name, parent_)
-    (hpx::performance_counters::instance_name, child_)
-    (hpx::performance_counters::instance_name, subchild_)
-)
-
-BOOST_FUSION_ADAPT_STRUCT(
-    hpx::performance_counters::path_elements,
-    (std::string, object_)
-    (hpx::performance_counters::instance_elements, instance_)
-    (std::string, counter_)
-    (std::string, parameters_)
-)
-
-namespace hpx { namespace performance_counters
-{
-    ///
-    ///    /objectname{parentinstancename#parentindex/instancename#instanceindex}
-    ///       /countername#parameters
-    ///    /objectname{parentinstancename#*/instancename#*}/countername#parameters
-    ///    /objectname{/basecounter}/countername,parameters
-    ///
-    namespace qi = boost::spirit::qi;
-
-    template <typename Iterator>
-    struct path_parser : qi::grammar<Iterator, path_elements()>
-    {
-        path_parser()
-          : path_parser::base_type(start)
-        {
-            start = -qi::lit(counter_prefix)
-                >> '/' >> +~qi::char_("/{#@") >> -instance
-                >> -('/' >>  +~qi::char_("#}@")) >> -('@' >> +qi::char_);
-            instance =
-                    '{' >> parent >> -('/' >> child) >> -('/' >> subchild) >> '}'
-                ;
-            parent =
-                    &qi::lit('/') >> qi::raw[start] >> qi::attr(-1) >> qi::attr(true)
-                    // base counter
-                |  +~qi::char_("#/}")
-                    >>  (   '#' >> raw_uint     // counter parent-instance name
-                        |  -qi::string("#*")    // counter parent-instance skeleton name
-                        )
-                    >> qi::attr(false)
-                ;
-            child =
-                   +~qi::char_("#/}")
-                    >>  (   qi::char_('#') >> +~qi::char_("/}") // counter instance name
-                        |  -qi::string("#*")    // counter instance skeleton name
-                        )
-                    >> qi::attr(false)
-                ;
-            subchild =
-                   +~qi::char_("#}")
-                    >>  (   '#' >> raw_uint     // counter (sub-)instance name
-                        |  -qi::string("#*")    // counter (sub-)instance skeleton name
-                        )
-                    >> qi::attr(false)
-                ;
-            raw_uint = qi::raw[qi::uint_];
-        }
-
-        qi::rule<Iterator, path_elements()> start;
-        qi::rule<Iterator, instance_elements()> instance;
-        qi::rule<Iterator, instance_name()> parent;
-        qi::rule<Iterator, instance_name()> child;
-        qi::rule<Iterator, instance_name()> subchild;
-        qi::rule<Iterator, std::string()> raw_uint;
-    };
-
     /// \brief Fill the given \a counter_path_elements instance from the given
     ///        full name of a counter
     ///
@@ -402,13 +290,10 @@ namespace hpx { namespace performance_counters
         counter_path_elements& path, error_code& ec)
     {
         path_elements elements;
-        path_parser<std::string::const_iterator> p;
-
-        std::string::const_iterator begin = name.begin();
-        if (!qi::parse(begin, name.end(), p, elements) || begin != name.end())
+        if (!parse_counter_name(name, elements))
         {
             HPX_THROWS_IF(ec, bad_parameter, "get_counter_path_elements",
-                hpx::util::format("invalid counter name format: %s", name));
+                hpx::util::format("invalid counter name format: {}", name));
             return status_invalid_data;
         }
 
@@ -464,7 +349,7 @@ namespace hpx { namespace performance_counters
                         HPX_THROWS_IF(ec, bad_parameter,
                             "get_counter_path_elements",
                             hpx::util::format(
-                                "invalid counter name format: %s", name));
+                                "invalid counter name format: {}", name));
                         return status_invalid_data;
                     }
                 }
@@ -497,15 +382,12 @@ namespace hpx { namespace performance_counters
     counter_status get_counter_type_path_elements(std::string const& name,
         counter_type_path_elements& path, error_code& ec)
     {
-        path_elements elements;
-        path_parser<std::string::const_iterator> p;
-
         // parse the full name
-        std::string::const_iterator begin = name.begin();
-        if (!qi::parse(begin, name.end(), p, elements) || begin != name.end())
+        path_elements elements;
+        if (!parse_counter_name(name, elements))
         {
             HPX_THROWS_IF(ec, bad_parameter, "get_counter_type_path_elements",
-                hpx::util::format("invalid counter name format: %s", name));
+                hpx::util::format("invalid counter name format: {}", name));
             return status_invalid_data;
         }
 
@@ -601,12 +483,13 @@ namespace hpx { namespace performance_counters
             "counter_average_timer",
             "counter_elapsed_time",
             "counter_histogram",
+            "counter_raw_values",
         };
     }
 
     char const* get_counter_type_name(counter_type type)
     {
-        if (type < counter_text || type > counter_histogram)
+        if (type < counter_text || type > counter_raw_values)
             return "unknown";
         return strings::counter_type_names[type];
     }
@@ -658,8 +541,8 @@ namespace hpx { namespace performance_counters
     ///////////////////////////////////////////////////////////////////////////
     namespace detail
     {
-        bool discover_counters(counter_info const& info,
-            std::vector<counter_info>& counters, error_code& ec)
+        bool discover_counters(std::vector<counter_info>& counters,
+            counter_info const& info, error_code& ec)
         {
             counters.push_back(info);
             return true;
@@ -669,11 +552,8 @@ namespace hpx { namespace performance_counters
     counter_status discover_counter_types(std::vector<counter_info>& counters,
         discover_counters_mode mode, error_code& ec)
     {
-        using hpx::util::placeholders::_1;
-
         discover_counter_func func(
-            hpx::util::bind(&detail::discover_counters, _1, std::ref(counters),
-                std::ref(ec)));
+            hpx::util::bind_front(&detail::discover_counters, std::ref(counters)));
 
         return discover_counter_types(std::move(func), mode, ec);
     }
@@ -682,11 +562,8 @@ namespace hpx { namespace performance_counters
         std::string const& name, std::vector<counter_info>& counters,
         discover_counters_mode mode, error_code& ec)
     {
-        using hpx::util::placeholders::_1;
-
         discover_counter_func func(
-            hpx::util::bind(&detail::discover_counters, _1, std::ref(counters),
-                std::ref(ec)));
+            hpx::util::bind_front(&detail::discover_counters, std::ref(counters)));
 
         return discover_counter_type(name, std::move(func), mode, ec);
     }
@@ -695,11 +572,8 @@ namespace hpx { namespace performance_counters
         counter_info const& info, std::vector<counter_info>& counters,
         discover_counters_mode mode, error_code& ec)
     {
-        using hpx::util::placeholders::_1;
-
         discover_counter_func func(
-            hpx::util::bind(&detail::discover_counters, _1, std::ref(counters),
-                std::ref(ec)));
+            hpx::util::bind_front(&detail::discover_counters, std::ref(counters)));
 
         return discover_counter_type(info, std::move(func), mode, ec);
     }
@@ -981,6 +855,23 @@ namespace hpx { namespace performance_counters
             return true;
         }
 
+        bool expand_counter_info_pool_threads(
+            counter_info& i, counter_path_elements& p,
+            discover_counter_func const& f, error_code& ec)
+        {
+            std::size_t num_threads =
+                hpx::resource::get_num_threads(p.instanceindex_);
+            for (std::size_t t = 0; t != num_threads; ++t)
+            {
+                p.subinstanceindex_ = static_cast<std::int64_t>(t);
+
+                counter_status status = get_counter_name(p, i.fullname_, ec);
+                if (!status_is_valid(status) || !f(i, ec) || ec)
+                    return false;
+            }
+            return true;
+        }
+
         bool expand_counter_info_threads(
             counter_info& i, counter_path_elements& p,
             discover_counter_func const& f, error_code& ec)
@@ -1108,6 +999,13 @@ namespace hpx { namespace performance_counters
                 return detail::expand_counter_info_pools(
                     expand_threads, i, p, f, ec);
             }
+            else if (p.instancename_ == "pool" && p.subinstancename_ == "*")
+            {
+                p.subinstancename_ = "worker-thread";
+                p.subinstanceindex_ = -1;
+                counter_info i = info;
+                return detail::expand_counter_info_pool_threads(i, p, f, ec);
+            }
 
             if (detail::is_thread_kind(p.instancename_))
             {
@@ -1150,8 +1048,8 @@ namespace hpx { namespace performance_counters
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    naming::id_type register_with_agas(lcos::future<naming::id_type> f,
-        std::string const& fullname)
+    static naming::id_type register_with_agas(std::string const& fullname,
+        lcos::future<naming::id_type> f)
     {
         // register the canonical name with AGAS
         naming::id_type id = f.get();
@@ -1220,16 +1118,17 @@ namespace hpx { namespace performance_counters
                 }
 
                 // attach the function which registers the id_type with AGAS
-                return f.then(hpx::util::bind(&register_with_agas,
-                    hpx::util::placeholders::_1,
-                    complemented_info.fullname_));
+                return f.then(
+                    hpx::launch::sync,
+                    hpx::util::bind_front(&register_with_agas,
+                        complemented_info.fullname_));
             }
             catch (hpx::exception const& e) {
                 if (&ec == &throws)
                     throw;
                 ec = make_error_code(e.get_error(), e.what());
                 LPCS_(warning) << hpx::util::format(
-                    "failed to create counter %s (%s)",
+                    "failed to create counter {} ({})",
                     remove_counter_prefix(complemented_info.fullname_), e.what());
                 return lcos::future<naming::id_type>();
             }
@@ -1246,6 +1145,84 @@ namespace hpx { namespace performance_counters
 
         counter_info info(name);          // set full counter name
         return get_counter_async(info, ec);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    void counter_value::serialize(
+        serialization::output_archive& ar, const unsigned int)
+    {
+        ar & status_ & time_ & count_ & value_ & scaling_ & scale_inverse_;
+    }
+
+    void counter_value::serialize(
+        serialization::input_archive& ar, const unsigned int)
+    {
+        ar & status_ & time_ & count_ & value_ & scaling_ & scale_inverse_;
+    }
+
+    void counter_values_array::serialize(
+        serialization::output_archive& ar, const unsigned int)
+    {
+        ar & status_ & time_ & count_ & values_ & scaling_ & scale_inverse_;
+    }
+
+    void counter_values_array::serialize(
+        serialization::input_archive& ar, const unsigned int)
+    {
+        ar & status_ & time_ & count_ & values_ & scaling_ & scale_inverse_;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    void counter_type_path_elements::serialize(
+        serialization::output_archive& ar, const unsigned int)
+    {
+        ar & objectname_ & countername_ & parameters_;
+    }
+
+    void counter_type_path_elements::serialize(
+        serialization::input_archive& ar, const unsigned int)
+    {
+        ar & objectname_ & countername_ & parameters_;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    void counter_path_elements::serialize(
+        serialization::output_archive& ar, const unsigned int)
+    {
+        typedef counter_type_path_elements base_type;
+        hpx::serialization::base_object_type<counter_path_elements, base_type>
+            base = hpx::serialization::base_object<base_type>(*this);
+
+        ar & base &
+            parentinstancename_ & instancename_ & subinstancename_ &
+            parentinstanceindex_ & instanceindex_ & subinstanceindex_ &
+            parentinstance_is_basename_;
+    }
+
+    void counter_path_elements::serialize(
+        serialization::input_archive& ar, const unsigned int)
+    {
+        typedef counter_type_path_elements base_type;
+        hpx::serialization::base_object_type<counter_path_elements, base_type>
+            base = hpx::serialization::base_object<base_type>(*this);
+
+        ar & base &
+            parentinstancename_ & instancename_ & subinstancename_ &
+            parentinstanceindex_ & instanceindex_ & subinstanceindex_ &
+            parentinstance_is_basename_;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    void counter_info::serialize(
+        serialization::output_archive& ar, const unsigned int)
+    {
+        ar & type_ & version_ & status_ & fullname_ & helptext_ & unit_of_measure_;
+    }
+
+    void counter_info::serialize(
+        serialization::input_archive& ar, const unsigned int)
+    {
+        ar & type_ & version_ & status_ & fullname_ & helptext_ & unit_of_measure_;
     }
 }}
 

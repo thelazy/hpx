@@ -15,7 +15,6 @@
 #include <hpx/util/detail/pack.hpp>
 
 #include <boost/array.hpp>
-#include <boost/type_traits/integral_constant.hpp>
 
 #include <array>
 #include <algorithm>
@@ -262,7 +261,8 @@ namespace hpx { namespace util
             HPX_HOST_DEVICE tuple_impl& operator=(tuple_impl&& other)
             {
                 int const _sequencer[]= {
-                    ((this->get<Is>() = other.template get<Is>()), 0)...
+                    ((this->get<Is>() =
+                      std::forward<Ts>(other.template get<Is>())), 0)...
                 };
                 (void)_sequencer;
                 return *this;
@@ -272,7 +272,8 @@ namespace hpx { namespace util
             HPX_HOST_DEVICE tuple_impl& operator=(UTuple&& other)
             {
                 int const _sequencer[]= {
-                    ((this->get<Is>() = util::get<Is>(other)), 0)...
+                    ((this->get<Is>() =
+                      util::get<Is>(std::forward<UTuple>(other))), 0)...
                 };
                 (void)_sequencer;
                 return *this;
@@ -306,7 +307,7 @@ namespace hpx { namespace util
             }
 
             template <typename Archive>
-            void serialize(Archive& ar, unsigned int const version)
+            void serialize(Archive& ar, unsigned int const)
             {
                 int const _sequencer[] = {
                     ((ar & this->get<Is>()), 0)...
@@ -559,22 +560,22 @@ namespace hpx { namespace util
 
     template <typename ...Ts>
     struct tuple_size<tuple<Ts...> >
-      : boost::integral_constant<std::size_t, sizeof...(Ts)>
+      : std::integral_constant<std::size_t, sizeof...(Ts)>
     {};
 
     template <typename T0, typename T1>
     struct tuple_size<std::pair<T0, T1> >
-      : boost::integral_constant<std::size_t, 2>
+      : std::integral_constant<std::size_t, 2>
     {};
 
     template <typename Type, std::size_t Size>
     struct tuple_size<boost::array<Type, Size> >
-      : boost::integral_constant<std::size_t, Size>
+      : std::integral_constant<std::size_t, Size>
     {};
 
     template <typename Type, std::size_t Size>
     struct tuple_size<std::array<Type, Size> >
-      : boost::integral_constant<std::size_t, Size>
+      : std::integral_constant<std::size_t, Size>
     {};
 
     // template <size_t I, class Tuple>
@@ -1078,7 +1079,7 @@ namespace hpx { namespace serialization
     void serialize(
         Archive& ar
       , ::hpx::util::tuple<Ts...>& t
-      , unsigned int const version = 0
+      , unsigned int const /*version*/ = 0
     )
     {
         ar & t._impl;

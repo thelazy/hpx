@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2013 Hartmut Kaiser
+//  Copyright (c) 2007-2017 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,8 +7,11 @@
 #include <hpx/hpx_init.hpp>
 #include <hpx/include/iostreams.hpp>
 #include <hpx/util/format.hpp>
+#include <hpx/runtime/serialization/detail/preprocess.hpp>
+#include <hpx/util/lightweight_test.hpp>
 
 #include <boost/lexical_cast.hpp>
+#include <boost/predef/other/endian.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -49,7 +52,7 @@ double benchmark_serialization(std::size_t data_size, std::size_t iterations,
         reinterpret_cast<std::uint64_t>(&test_function));
 
     // compose archive flags
-#ifdef BOOST_BIG_ENDIAN
+#if BOOST_ENDIAN_BIG_BYTE
     std::string endian_out =
         hpx::get_config_entry("hpx.parcel.endian_out", "big");
 #else
@@ -96,7 +99,6 @@ double benchmark_serialization(std::size_t data_size, std::size_t iterations,
     hpx::naming::gid_type dest = here.get_gid();
     if (continuation) {
         outp = hpx::parcelset::parcel(hpx::parcelset::detail::create_parcel::call(
-            std::true_type(),
             std::move(dest), std::move(addr),
             hpx::actions::typed_continuation<int>(here),
             test_action(), hpx::threads::thread_priority_normal, buffer
@@ -104,7 +106,6 @@ double benchmark_serialization(std::size_t data_size, std::size_t iterations,
     }
     else {
         outp = hpx::parcelset::parcel(hpx::parcelset::detail::create_parcel::call(
-            std::false_type(),
             std::move(dest), std::move(addr),
             test_action(), hpx::threads::thread_priority_normal, buffer));
     }
@@ -176,8 +177,9 @@ int hpx_main(boost::program_options::variables_map& vm)
     if (print_header)
         hpx::cout << "datasize,testcount,average_time[s]\n" << hpx::flush;
 
-    hpx::util::format_to(hpx::cout, "%d,%d,%f\n",
+    hpx::util::format_to(hpx::cout, "{},{},{}\n",
         data_size, iterations, overall_time / concurrency) << hpx::flush;
+    hpx::util::print_cdash_timing("Serialization", overall_time / concurrency);
 
     return hpx::finalize();
 }

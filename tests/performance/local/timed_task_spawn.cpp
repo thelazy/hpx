@@ -18,7 +18,7 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/math/common_factor.hpp>
+#include <boost/integer/common_factor.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -148,7 +148,7 @@ void print_results(
     }
 
     hpx::util::format_to(cout,
-        "%lu, %lu, %lu, %lu, %.14g, %.14g",
+        "{}, {}, {}, {}, {:.14g}, {:.14g}",
         delay,
         tasks,
         suspended_tasks,
@@ -160,7 +160,7 @@ void print_results(
     if (ac)
     {
         for (std::uint64_t i = 0; i < counter_shortnames.size(); ++i)
-            hpx::util::format_to(cout, ", %.14g",
+            hpx::util::format_to(cout, ", {:.14g}",
                 counter_values[i].get_value<double>());
     }
 
@@ -202,7 +202,8 @@ hpx::threads::thread_result_type invoke_worker_timed_no_suspension(
     )
 {
     worker_timed(delay * 1000);
-    return hpx::threads::thread_result_type(hpx::threads::terminated, nullptr);
+    return hpx::threads::thread_result_type(hpx::threads::terminated,
+        hpx::threads::invalid_thread_id);
 }
 
 hpx::threads::thread_result_type invoke_worker_timed_suspension(
@@ -214,7 +215,8 @@ hpx::threads::thread_result_type invoke_worker_timed_suspension(
     hpx::error_code ec(hpx::lightweight);
     hpx::this_thread::suspend(hpx::threads::suspended, "suspend", ec);
 
-    return hpx::threads::thread_result_type(hpx::threads::terminated, nullptr);
+    return hpx::threads::thread_result_type(hpx::threads::terminated,
+        hpx::threads::invalid_thread_id);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -232,7 +234,7 @@ void stage_worker_static_balanced_stackbased(
           , hpx::threads::pending
           , false
           , hpx::threads::thread_priority_normal
-          , target_thread
+          , hpx::threads::thread_schedule_hint(target_thread)
             );
     else
         hpx::threads::register_thread_plain(
@@ -241,7 +243,7 @@ void stage_worker_static_balanced_stackbased(
           , hpx::threads::pending
           , false
           , hpx::threads::thread_priority_normal
-          , target_thread
+          , hpx::threads::thread_schedule_hint(target_thread)
             );
 }
 
@@ -257,7 +259,7 @@ void stage_worker_static_imbalanced(
           , hpx::threads::pending
           , false
           , hpx::threads::thread_priority_normal
-          , 0
+          , hpx::threads::thread_schedule_hint(0)
             );
     else
         hpx::threads::register_thread_plain(
@@ -266,7 +268,7 @@ void stage_worker_static_imbalanced(
           , hpx::threads::pending
           , false
           , hpx::threads::thread_priority_normal
-          , 0
+          , hpx::threads::thread_schedule_hint(0)
             );
 }
 
@@ -308,7 +310,7 @@ void stage_workers(
             , "stage_workers"
             , hpx::threads::pending
             , hpx::threads::thread_priority_normal
-            , target_thread
+            , hpx::threads::thread_schedule_hint(target_thread)
               );
         return;
     }
@@ -401,8 +403,8 @@ int hpx_main(
         ///////////////////////////////////////////////////////////////////////
         if (suspended_tasks != 0)
         {
-            std::uint64_t gcd = boost::math::gcd(tasks_per_feeder
-                                                 , suspended_tasks_per_feeder);
+            std::uint64_t gcd = boost::integer::gcd(
+                tasks_per_feeder, suspended_tasks_per_feeder);
 
             suspend_step = suspended_tasks_per_feeder / gcd;
             // We check earlier to make sure that there are never more
@@ -460,7 +462,7 @@ int hpx_main(
                 , "stage_workers"
                 , hpx::threads::pending
                 , hpx::threads::thread_priority_normal
-                , i
+                , hpx::threads::thread_schedule_hint(i)
                   );
         }
 

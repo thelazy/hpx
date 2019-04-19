@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <sstream>
 #include <type_traits>
+#include <vector>
 
 namespace hpx { namespace components
 {
@@ -62,8 +63,7 @@ public:
       , lsb_(lsb)
     {}
 
-    ~fixed_component_base()
-    {}
+    ~fixed_component_base() = default;
 
     /// \brief finalize() will be called just before the instance gets
     ///        destructed
@@ -79,28 +79,17 @@ public:
         }
     }
 
-    // \brief This exposes the component type.
-    static component_type get_component_type()
-    {
-        return components::get_component_type<this_component_type>();
-    }
-    static void set_component_type(component_type type)
-    {
-        components::set_component_type<this_component_type>(type);
-    }
-
 private:
     // declare friends which are allowed to access get_base_gid()
-    template <typename Component_>
-    friend naming::gid_type server::create(std::size_t count);
+    template <typename Component_, typename...Ts>
+    friend naming::gid_type server::create(Ts&&... ts);
 
-    template <typename Component_>
-    friend naming::gid_type server::create(
-        util::unique_function_nonser<void(void*)> const& ctor);
+    template <typename Component_, typename...Ts>
+    friend naming::gid_type server::create_migrated(
+        naming::gid_type const& gid, void** p, Ts&&...ts);
 
-    template <typename Component_>
-    friend naming::gid_type server::create(naming::gid_type const& gid,
-        util::unique_function_nonser<void(void*)> const& ctor, void** p);
+    template <typename Component_, typename...Ts>
+    friend std::vector<naming::gid_type> bulk_create(std::size_t count, Ts&&...ts);
 
     // Return the component's fixed GID.
     naming::gid_type get_base_gid(
@@ -174,11 +163,14 @@ public:
         }
     }
 
-    // Pinning functionality
-    void pin() {}
-    void unpin() {}
-    std::uint32_t pin_count() const { return 0; }
-
+#if defined(HPX_DISABLE_ASSERTS) || defined(BOOST_DISABLE_ASSERTS) || defined(NDEBUG)
+    HPX_CXX14_CONSTEXPR static void mark_as_migrated()
+    {
+    }
+    HPX_CXX14_CONSTEXPR static void on_migrated()
+    {
+    }
+#else
     void mark_as_migrated()
     {
         // If this assertion is triggered then this component instance is being
@@ -194,6 +186,7 @@ public:
         // migration.
         HPX_ASSERT(false);
     }
+#endif
 
 private:
     mutable naming::gid_type gid_;
@@ -204,18 +197,27 @@ private:
 namespace detail
 {
     ///////////////////////////////////////////////////////////////////////
-    template <typename Component>
-    struct fixed_heap_factory
+    struct fixed_heap
     {
-        static Component* alloc(std::size_t count)
+#if defined(HPX_DISABLE_ASSERTS) || defined(BOOST_DISABLE_ASSERTS) || defined(NDEBUG)
+        HPX_CONSTEXPR static void* alloc(std::size_t count)
+        {
+            return nullptr;
+        }
+        HPX_CXX14_CONSTEXPR static void free(void* p, std::size_t count)
+        {
+        }
+#else
+        static void* alloc(std::size_t /*count*/)
         {
             HPX_ASSERT(false);        // this shouldn't ever be called
             return nullptr;
         }
-        static void free(void* p, std::size_t count)
+        static void free(void* /*p*/, std::size_t /*count*/)
         {
             HPX_ASSERT(false);        // this shouldn't ever be called
         }
+#endif
     };
 }
 
@@ -227,8 +229,18 @@ class fixed_component : public Component
     typedef Component type_holder;
     typedef fixed_component<Component> component_type;
     typedef component_type derived_type;
-    typedef detail::fixed_heap_factory<component_type> heap_type;
+    typedef detail::fixed_heap heap_type;
 
+#if defined(HPX_DISABLE_ASSERTS) || defined(BOOST_DISABLE_ASSERTS) || defined(NDEBUG)
+    HPX_CONSTEXPR static Component* create(std::size_t count)
+    {
+        return nullptr;
+    }
+
+    HPX_CXX14_CONSTEXPR static void destroy(Component* p, std::size_t count = 1)
+    {
+    }
+#else
     /// \brief  The function \a create is used for allocation and
     ///         initialization of instances of the derived components.
     static Component* create(std::size_t count)
@@ -243,6 +255,7 @@ class fixed_component : public Component
     {
         HPX_ASSERT(false);        // this shouldn't ever be called
     }
+#endif
 };
 
 }}

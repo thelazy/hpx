@@ -12,7 +12,7 @@
 #include <hpx/lcos/detail/async_colocated_fwd.hpp>
 #include <hpx/lcos/future.hpp>
 #include <hpx/runtime/actions/manage_object_action.hpp>
-#include <hpx/runtime/applier/register_apply_colocated.hpp>
+// #include <hpx/runtime/applier/register_apply_colocated.hpp>
 #include <hpx/runtime/components/component_type.hpp>
 #include <hpx/runtime/components/server/runtime_support.hpp>
 #include <hpx/runtime/naming/name.hpp>
@@ -229,40 +229,6 @@ namespace hpx { namespace components { namespace stubs
         }
 
         ///////////////////////////////////////////////////////////////////////
-        static lcos::future<std::vector<naming::id_type> >
-        bulk_create_components_async(
-            naming::id_type const& gid, components::component_type type,
-            std::size_t count = 1);
-
-        /// Create a new component \a type using the runtime_support with the
-        /// given \a targetgid. Block for the creation to finish.
-        static std::vector<naming::id_type> bulk_create_components(
-            naming::id_type const& gid, components::component_type type,
-            std::size_t count = 1);
-
-        ///////////////////////////////////////////////////////////////////////
-        /// Create a new memory block using the runtime_support with the
-        /// given \a targetgid. This is a non-blocking call. The caller needs
-        /// to call \a future#get on the result of this function
-        /// to obtain the global id of the newly created object.
-        template <typename T, typename Config>
-        static lcos::future<naming::id_type>
-        create_memory_block_async(
-            naming::id_type const& id, std::size_t count,
-            hpx::actions::manage_object_action<T, Config> const& act);
-
-        /// Create a new memory block using the runtime_support with the
-        /// given \a targetgid. Block for the creation to finish.
-        template <typename T, typename Config>
-        static naming::id_type create_memory_block(
-            naming::id_type const& id, std::size_t count,
-            hpx::actions::manage_object_action<T, Config> const& act)
-        {
-            // The following get yields control while the action above
-            // is executed and the result is returned to the future
-            return create_memory_block_async(id, count, act).get();
-        }
-
         static lcos::future<int>
         load_components_async(naming::id_type const& gid);
         static int load_components(naming::id_type const& gid);
@@ -272,11 +238,6 @@ namespace hpx { namespace components { namespace stubs
             bool pre_startup);
         static void call_startup_functions(naming::id_type const& gid,
             bool pre_startup);
-
-        static void free_component_sync(agas::gva const& g,
-            naming::gid_type const& gid, std::uint64_t count = 1);
-        static void free_component_locally(agas::gva const& g,
-            naming::gid_type const& gid);
 
         /// \brief Shutdown the given runtime system
         static lcos::future<void>
@@ -305,17 +266,6 @@ namespace hpx { namespace components { namespace stubs
 
         ///////////////////////////////////////////////////////////////////////
         static void
-        update_agas_cache_entry(naming::id_type const& targetgid,
-            naming::gid_type const& gid, naming::address const& g,
-            std::uint64_t count, std::uint64_t offset);
-
-        static void
-        update_agas_cache_entry_colocated(naming::id_type const& targetgid,
-            naming::gid_type const& gid, naming::address const& g,
-            std::uint64_t count, std::uint64_t offset);
-
-        ///////////////////////////////////////////////////////////////////////
-        static void
         garbage_collect_non_blocking(naming::id_type const& targetgid);
 
         static lcos::future<void>
@@ -341,24 +291,11 @@ namespace hpx { namespace components { namespace stubs
             util::section& ini);
 
         ///////////////////////////////////////////////////////////////////////
-        /// \brief Retrieve instance count for given component type
-        static lcos::future<std::int32_t > get_instance_count_async(
-            naming::id_type const& targetgid, components::component_type type);
-        static std::int32_t  get_instance_count(
-            naming::id_type const& targetgid,
-            components::component_type type);
-
-        ///////////////////////////////////////////////////////////////////////
         static void
         remove_from_connection_cache_async(naming::id_type const& target,
             naming::gid_type const& gid,
             parcelset::endpoints_type const& endpoints);
     };
 }}}
-
-HPX_REGISTER_APPLY_COLOCATED_DECLARATION(
-    hpx::components::server::runtime_support::update_agas_cache_entry_action
-  , hpx_apply_colocated_update_agas_cache_entry_action
-)
 
 #endif

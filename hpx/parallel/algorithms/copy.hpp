@@ -1,6 +1,6 @@
 //  Copyright (c) 2014 Grant Mercer
 //  Copyright (c) 2015 Daniel Bourgeois
-//  Copyright (c) 2016-2017 Hartmut Kaiser
+//  Copyright (c) 2016-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -13,6 +13,7 @@
 #include <hpx/config.hpp>
 #include <hpx/traits/concepts.hpp>
 #include <hpx/traits/is_iterator.hpp>
+#include <hpx/util/assert.hpp>
 #include <hpx/util/invoke.hpp>
 #include <hpx/util/tagged_pair.hpp>
 
@@ -87,6 +88,13 @@ namespace hpx { namespace parallel { inline namespace v1
             parallel(ExPolicy && policy, FwdIter1 first, FwdIter1 last,
                 FwdIter2 dest)
             {
+#if defined(HPX_COMPUTE_DEVICE_CODE)
+                HPX_ASSERT(false);
+                typename util::detail::algorithm_result<
+                    ExPolicy, std::pair<FwdIter1, FwdIter2>
+                >::type *dummy = nullptr;
+                return std::move(*dummy);
+#else
                 typedef hpx::util::zip_iterator<FwdIter1, FwdIter2> zip_iterator;
 
                 return get_iter_pair(
@@ -102,9 +110,16 @@ namespace hpx { namespace parallel { inline namespace v1
                             util::copy_synchronize(get<0>(iters), get<1>(iters));
                             return std::move(last);
                         }));
+#endif
             }
         };
 
+#if defined(HPX_COMPUTE_DEVICE_CODE)
+        template<typename FwdIter1, typename FwdIter2, typename Enable = void>
+        struct copy_iter
+          : public copy<std::pair<FwdIter1, FwdIter2> >
+        {};
+#else
         ///////////////////////////////////////////////////////////////////////
         template<typename FwdIter1, typename FwdIter2, typename Enable = void>
         struct copy_iter;
@@ -131,6 +146,7 @@ namespace hpx { namespace parallel { inline namespace v1
             >::type>
           : public copy<std::pair<FwdIter1, FwdIter2> >
         {};
+#endif
 
         /// \endcond
     }
@@ -313,21 +329,6 @@ namespace hpx { namespace parallel { inline namespace v1
     >::type
     copy_n(ExPolicy && policy, FwdIter1 first, Size count, FwdIter2 dest)
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Required at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value ||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Required at least forward iterator.");
@@ -336,7 +337,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         using hpx::util::tagged_pair;
         using hpx::util::make_tagged_pair;
@@ -423,14 +423,11 @@ namespace hpx { namespace parallel { inline namespace v1
                     > scan_partitioner_type;
 
                 auto f1 =
-                    [pred, proj, flags, policy]
-                    (
-                       zip_iterator part_begin, std::size_t part_size
-                    )   -> std::size_t
+                    [HPX_CAPTURE_FORWARD(pred),
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](zip_iterator part_begin, std::size_t part_size)
+                    ->  std::size_t
                     {
-                        HPX_UNUSED(flags);
-                        HPX_UNUSED(policy);
-
                         std::size_t curr = 0;
 
                         // MSVC complains if proj is captured by ref below
@@ -438,8 +435,8 @@ namespace hpx { namespace parallel { inline namespace v1
                             part_begin, part_size,
                             [&pred, proj, &curr](zip_iterator it) mutable
                             {
-                                using hpx::util::invoke;
-                                bool f = invoke(pred, invoke(proj, get<0>(*it)));
+                                bool f = hpx::util::invoke(pred,
+                                    hpx::util::invoke(proj, get<0>(*it)));
 
                                 if ((get<1>(*it) = f))
                                     ++curr;
@@ -448,14 +445,13 @@ namespace hpx { namespace parallel { inline namespace v1
                         return curr;
                     };
                 auto f3 =
-                    [dest, flags, policy](
+                    [dest, flags](
                         zip_iterator part_begin, std::size_t part_size,
                         hpx::shared_future<std::size_t> curr,
                         hpx::shared_future<std::size_t> next
                     ) mutable
                     {
                         HPX_UNUSED(flags);
-                        HPX_UNUSED(policy);
 
                         next.get();     // rethrow exceptions
 
@@ -464,10 +460,21 @@ namespace hpx { namespace parallel { inline namespace v1
                             part_begin, part_size,
                             [&dest](zip_iterator it) mutable
                             {
-                                if(get<1>(*it))
+                                if (get<1>(*it))
                                     *dest++ = get<0>(*it);
                             });
                     };
+
+                auto f4 =
+                    [last, dest, flags](
+                        std::vector<hpx::shared_future<std::size_t>>&& items,
+                        std::vector<hpx::future<void>>&&) mutable
+                    -> std::pair<FwdIter1, FwdIter2> {
+                    HPX_UNUSED(flags);
+
+                    std::advance(dest, items.back().get());
+                    return std::make_pair(last, dest);
+                };
 
                 return scan_partitioner_type::call(
                     std::forward<ExPolicy>(policy),
@@ -480,16 +487,7 @@ namespace hpx { namespace parallel { inline namespace v1
                     // step 3 runs final accumulation on each partition
                     std::move(f3),
                     // step 4 use this return value
-                    [last, dest, flags](
-                        std::vector<hpx::shared_future<std::size_t> > && items,
-                        std::vector<hpx::future<void> > &&) mutable
-                    ->  std::pair<FwdIter1, FwdIter2>
-                    {
-                        HPX_UNUSED(flags);
-
-                        std::advance(dest, items.back().get());
-                        return std::make_pair(last, dest);
-                    });
+                    std::move(f4));
             }
         };
         /// \endcond
@@ -587,21 +585,6 @@ namespace hpx { namespace parallel { inline namespace v1
     copy_if(ExPolicy&& policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest, F && f,
         Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Required at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value ||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Required at least forward iterator.");
@@ -610,7 +593,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return hpx::util::make_tagged_pair<tag::in, tag::out>(
             detail::copy_if<std::pair<FwdIter1, FwdIter2> >().call(

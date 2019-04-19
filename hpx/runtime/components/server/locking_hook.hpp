@@ -11,12 +11,13 @@
 #include <hpx/runtime/get_lva.hpp>
 #include <hpx/runtime/threads/coroutines/coroutine.hpp>
 #include <hpx/traits/action_decorate_function.hpp>
-#include <hpx/util/bind.hpp>
+#include <hpx/util/bind_front.hpp>
 #include <hpx/util/register_locks.hpp>
 #include <hpx/util/unlock_guard.hpp>
 
 #include <mutex>
 #include <utility>
+#include <type_traits>
 
 namespace hpx { namespace components
 {
@@ -44,6 +45,8 @@ namespace hpx { namespace components
           : base_type(std::move(rhs))
         {}
 
+        typedef void decorates_action;
+
         /// This is the hook implementation for decorate_action which locks
         /// the component ensuring that only one action is executed at a time
         /// for this component instance.
@@ -51,12 +54,11 @@ namespace hpx { namespace components
         static threads::thread_function_type
         decorate_action(naming::address::address_type lva, F && f)
         {
-            return util::bind(
-                util::one_shot(&locking_hook::thread_function),
+            return util::one_shot(util::bind_front(
+                &locking_hook::thread_function,
                 get_lva<this_component_type>::call(lva),
-                util::placeholders::_1,
-                traits::action_decorate_function<base_type>::call(
-                    lva, std::forward<F>(f)));
+                traits::component_decorate_function<base_type>::call(
+                    lva, std::forward<F>(f))));
         }
 
     protected:
@@ -66,7 +68,9 @@ namespace hpx { namespace components
 
         struct decorate_wrapper
         {
-            template <typename F>
+            template <typename F, typename Enable = typename
+                std::enable_if<!std::is_same<typename hpx::util::decay<F>::type,
+                    decorate_wrapper>::value>::type>
             decorate_wrapper(F && f)
             {
                 threads::get_self().decorate_yield(std::forward<F>(f));
@@ -81,9 +85,10 @@ namespace hpx { namespace components
         // Execute the wrapped action. This locks the mutex ensuring a thread
         // safe action invocation.
         threads::thread_result_type thread_function(
-            threads::thread_arg_type state, threads::thread_function_type f)
+            threads::thread_function_type f, threads::thread_arg_type state)
         {
-            threads::thread_result_type result(threads::unknown, nullptr);
+            threads::thread_result_type result(threads::unknown,
+                threads::invalid_thread_id);
 
             // now lock the mutex and execute the action
             std::unique_lock<mutex_type> l(mtx_);
@@ -100,8 +105,7 @@ namespace hpx { namespace components
             {
                 // register our yield decorator
                 decorate_wrapper yield_decorator(
-                    util::bind(&locking_hook::yield_function, this,
-                        util::placeholders::_1));
+                    util::bind_front(&locking_hook::yield_function, this));
 
                 result = f(state);
 

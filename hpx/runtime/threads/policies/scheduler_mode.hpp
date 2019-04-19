@@ -1,4 +1,4 @@
-//  Copyright (c) 2015 Hartmut Kaiser
+//  Copyright (c) 2015-2017 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -8,13 +8,41 @@
 
 namespace hpx { namespace threads { namespace policies
 {
+    /// This enumeration describes the possible modes of a scheduler.
     enum scheduler_mode
     {
-        nothing_special = 0,
-        do_background_work = 0x1,
-        reduce_thread_priority = 0x02,
-        delay_exit = 0x04,
-        fast_idle_mode = 0x08
+        nothing_special = 0,            ///< As the name suggests, this option
+            ///< can be used to disable all other options.
+
+        do_background_work = 0x1,       ///< The scheduler will periodically
+            ///< call a provided callback function from a special HPX thread
+            ///< to enable performing background-work, for instance driving
+            ///< networking progress or garbage-collect AGAS.
+        reduce_thread_priority = 0x02,  ///< The kernel priority of the
+            ///< os-thread driving the scheduler will be reduced below normal.
+        delay_exit = 0x04,              ///< The scheduler will wait for some
+            ///< unspecified amount of time before exiting the scheduling loop
+            ///< while being terminated to make sure no other work is being
+            ///< scheduled during processing the shutdown request.
+        fast_idle_mode = 0x08,          ///< Some schedulers have the capability
+            ///< to act as 'embedded' schedulers. In this case it needs to
+            ///< periodically invoke a provided callback into the outer scheduler
+            ///< more frequently than normal. This option enables this behavior.
+        enable_elasticity = 0x10,        ///< This option allows for the
+            ///< scheduler to dynamically increase and reduce the number of
+            ///< processing units it runs on. Setting this value not succeed for
+            ///< schedulers that do not support this functionality.
+        enable_stealing = 0x20,          ///< This option allows for certain
+            ///< schedulers to explicitly disable thread stealing
+        enable_idle_backoff = 0x40,     ///< This option allows for certain
+            ///< schedulers to explicitly disable exponential idle-back off
+        default_mode =
+                do_background_work |
+                reduce_thread_priority |
+                delay_exit |
+                enable_stealing |
+                enable_idle_backoff
+            ///< This option represents the default mode.
     };
 }}}
 

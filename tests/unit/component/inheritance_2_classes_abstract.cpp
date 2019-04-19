@@ -30,6 +30,7 @@ struct A : hpx::components::abstract_managed_component_base<A>
     HPX_DEFINE_COMPONENT_ACTION(A, test0_nonvirt, test0_action);
 };
 
+HPX_REGISTER_COMPONENT_HEAP(hpx::components::managed_component<A>);
 HPX_DEFINE_GET_COMPONENT_TYPE(A);
 
 typedef A::test0_action test0_action;
@@ -49,7 +50,7 @@ struct B : A, hpx::components::managed_component_base<B>
     B() { b_ctor = true; }
     ~B() { b_dtor = true; }
 
-    std::string test0() const { return "B"; }
+    std::string test0() const override { return "B"; }
 
     std::string test1() const { return "B"; }
     HPX_DEFINE_COMPONENT_ACTION(B, test1, test1_action);
@@ -119,6 +120,10 @@ int main()
         HPX_TEST_EQ(obj.test0(), "B");
     }
 
+    // Make sure AGAS kicked in...
+    hpx::agas::garbage_collect();
+    hpx::this_thread::yield();
+
     HPX_TEST(a_ctor); HPX_TEST(a_dtor);
     HPX_TEST(b_ctor); HPX_TEST(b_dtor);
 
@@ -133,6 +138,10 @@ int main()
         HPX_TEST_EQ(obj.test1(), "B");
 
     }
+
+    // Make sure AGAS kicked in...
+    hpx::agas::garbage_collect();
+    hpx::this_thread::yield();
 
     HPX_TEST(a_ctor); HPX_TEST(a_dtor);
     HPX_TEST(b_ctor); HPX_TEST(b_dtor);

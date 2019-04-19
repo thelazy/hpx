@@ -12,19 +12,15 @@
 #include <hpx/async.hpp>
 #include <hpx/runtime/agas/detail/hosted_locality_namespace.hpp>
 #include <hpx/runtime/agas/server/locality_namespace.hpp>
-#include <hpx/runtime/parcelset/locality.hpp>
 #include <hpx/runtime/naming/name.hpp>
+#include <hpx/runtime/parcelset/locality.hpp>
+#include <hpx/runtime/serialization/vector.hpp>
 #include <hpx/util/assert.hpp>
 
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
-
-HPX_REGISTER_BASE_LCO_WITH_VALUE_ID(
-    hpx::parcelset::endpoints_type, parcelset_endpoints_type,
-    hpx::actions::base_lco_with_value_parcelset_endpoints_get,
-    hpx::actions::base_lco_with_value_parcelset_endpoints_set)
 
 namespace hpx { namespace agas { namespace detail
 {

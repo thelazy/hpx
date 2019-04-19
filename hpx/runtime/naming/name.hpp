@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2016 Hartmut Kaiser
+//  Copyright (c) 2007-2019 Hartmut Kaiser
 //  Copyright (c) 2011 Bryce Lelbach
 //  Copyright (c) 2007 Richard D. Guidry Jr.
 //
@@ -9,8 +9,7 @@
 #define HPX_RUNTIME_NAMING_NAME_HPP
 
 #include <hpx/config.hpp>
-#include <hpx/lcos/local/spinlock.hpp>
-#include <hpx/lcos/local/spinlock_pool.hpp>
+#include <hpx/util/spinlock_pool.hpp>
 #include <hpx/runtime/naming/id_type.hpp>
 #include <hpx/runtime/naming_fwd.hpp>
 #include <hpx/runtime/serialization/serialization_fwd.hpp>
@@ -19,6 +18,8 @@
 #include <hpx/traits/promise_local_result.hpp>
 #include <hpx/util/assert.hpp>
 #include <hpx/util/atomic_count.hpp>
+#include <hpx/util/detail/yield_k.hpp>
+#include <hpx/util/internal_allocator.hpp>
 #include <hpx/util/itt_notify.hpp>
 #include <hpx/util/register_locks.hpp>
 
@@ -46,6 +47,9 @@ namespace hpx { namespace naming
         // forward declaration
         inline std::uint64_t strip_internal_bits_from_gid(std::uint64_t msb)
             HPX_SUPER_PURE;
+
+        inline std::uint64_t strip_internal_bits_and_component_type_from_gid(
+            std::uint64_t msb) HPX_SUPER_PURE;
 
         inline std::uint64_t strip_lock_from_gid(std::uint64_t msb)
             HPX_SUPER_PURE;
@@ -80,19 +84,37 @@ namespace hpx { namespace naming
         static std::uint64_t const locality_id_mask = 0xffffffff00000000ull;
         static std::uint16_t const locality_id_shift = 32; //-V112
 
-        static std::uint64_t const virtual_memory_mask = 0x7fffffull;
+        static std::uint64_t const virtual_memory_mask = 0x3fffffull;
 
         // don't cache this id in the AGAS caches
         static std::uint64_t const dont_cache_mask = 0x800000ull; //-V112
 
+        // the object is migratable
+        static std::uint64_t const is_migratable = 0x400000ull; //-V112
+
+        // Bit 64 is set for all dynamically assigned ids (if this is not set
+        // then the lsb corresponds to the lva of the referenced object).
+        static std::uint64_t const dynamically_assigned = 0x1ull;
+
+        // Bits 65-84 are used to store the component type (20 bits) if bit
+        // 64 is not set.
+        static std::uint64_t const component_type_base_mask = 0xfffffull;
+        static std::uint64_t const component_type_shift = 1ull;
+        static std::uint64_t const component_type_mask =
+            component_type_base_mask << component_type_shift;
+
         static std::uint64_t const credit_bits_mask =
             credit_mask | was_split_mask | has_credits_mask;
-        static std::uint64_t const internal_bits_mask =
-            credit_bits_mask | is_locked_mask | dont_cache_mask;
+        static std::uint64_t const internal_bits_mask = credit_bits_mask |
+            is_locked_mask | dont_cache_mask | is_migratable;
         static std::uint64_t const special_bits_mask =
-            locality_id_mask | internal_bits_mask;
+            locality_id_mask | internal_bits_mask | component_type_mask;
 
-        explicit gid_type (std::uint64_t lsb_id = 0)
+        gid_type ()
+          : id_msb_(0), id_lsb_(0)
+        {}
+
+        explicit gid_type (std::uint64_t lsb_id)
           : id_msb_(0), id_lsb_(lsb_id)
         {}
 
@@ -212,9 +234,12 @@ namespace hpx { namespace naming
         // comparison is required as well
         friend bool operator== (gid_type const& lhs, gid_type const& rhs)
         {
-            return (detail::strip_internal_bits_from_gid(lhs.id_msb_) ==
-                    detail::strip_internal_bits_from_gid(rhs.id_msb_)) &&
-                (lhs.id_lsb_ == rhs.id_lsb_);
+            std::int64_t lhs_msb =
+                detail::strip_internal_bits_from_gid(lhs.id_msb_);
+            std::int64_t rhs_msb =
+                detail::strip_internal_bits_from_gid(rhs.id_msb_);
+
+            return (lhs_msb == rhs_msb) && (lhs.id_lsb_ == rhs.id_lsb_);
         }
         friend bool operator!= (gid_type const& lhs, gid_type const& rhs)
         {
@@ -223,13 +248,16 @@ namespace hpx { namespace naming
 
         friend bool operator< (gid_type const& lhs, gid_type const& rhs)
         {
-            if (detail::strip_internal_bits_from_gid(lhs.id_msb_) <
-                detail::strip_internal_bits_from_gid(rhs.id_msb_))
+            std::int64_t lhs_msb =
+                detail::strip_internal_bits_from_gid(lhs.id_msb_);
+            std::int64_t rhs_msb =
+                detail::strip_internal_bits_from_gid(rhs.id_msb_);
+
+            if (lhs_msb < rhs_msb)
             {
                 return true;
             }
-            if (detail::strip_internal_bits_from_gid(lhs.id_msb_) >
-                detail::strip_internal_bits_from_gid(rhs.id_msb_))
+            if (lhs_msb > rhs_msb)
             {
                 return false;
             }
@@ -238,13 +266,16 @@ namespace hpx { namespace naming
 
         friend bool operator<= (gid_type const& lhs, gid_type const& rhs)
         {
-            if (detail::strip_internal_bits_from_gid(lhs.id_msb_) <
-                detail::strip_internal_bits_from_gid(rhs.id_msb_))
+            std::int64_t lhs_msb =
+                detail::strip_internal_bits_from_gid(lhs.id_msb_);
+            std::int64_t rhs_msb =
+                detail::strip_internal_bits_from_gid(rhs.id_msb_);
+
+            if (lhs_msb < rhs_msb)
             {
                 return true;
             }
-            if (detail::strip_internal_bits_from_gid(lhs.id_msb_) >
-                detail::strip_internal_bits_from_gid(rhs.id_msb_))
+            if (lhs_msb > rhs_msb)
             {
                 return false;
             }
@@ -296,7 +327,7 @@ namespace hpx { namespace naming
 
             for (std::size_t k = 0; !acquire_lock(); ++k)
             {
-                lcos::local::spinlock::yield(k);
+                util::detail::yield_k(k, "hpx::naming::gid_type::lock");
             }
 
             util::register_lock(this);
@@ -344,7 +375,7 @@ namespace hpx { namespace naming
         HPX_SERIALIZATION_SPLIT_MEMBER()
 
         // lock implementation
-        typedef lcos::local::spinlock_pool<tag> internal_mutex_type;
+        typedef util::spinlock_pool<tag> internal_mutex_type;
 
         // returns whether lock has been acquired
         bool acquire_lock()
@@ -446,9 +477,31 @@ namespace hpx { namespace naming
     }
 
     ///////////////////////////////////////////////////////////////////////////
+    inline bool refers_to_virtual_memory(std::uint64_t msb)
+    {
+        return !(msb & gid_type::virtual_memory_mask);
+    }
+
     inline bool refers_to_virtual_memory(gid_type const& gid)
     {
-        return !(gid.get_msb() & gid_type::virtual_memory_mask);
+        return refers_to_virtual_memory(gid.get_msb());
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    inline bool refers_to_local_lva(gid_type const& gid)
+    {
+        return !(gid.get_msb() & gid_type::dynamically_assigned);
+    }
+
+    inline gid_type replace_component_type(gid_type const& gid,
+        std::uint32_t type)
+    {
+        std::uint64_t msb = gid.get_msb() & ~gid_type::component_type_mask;
+
+        HPX_ASSERT(!(msb & gid_type::dynamically_assigned));
+        msb |= ((type << gid_type::component_type_shift) &
+                    gid_type::component_type_mask);
+        return gid_type(msb, gid.get_lsb());
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -505,6 +558,17 @@ namespace hpx { namespace naming
         }
 
         ///////////////////////////////////////////////////////////////////////
+        inline bool is_migratable(gid_type const& id)
+        {
+            return (id.get_msb() & gid_type::is_migratable) ? true : false;
+        }
+
+        inline void set_is_migratable(gid_type& gid)
+        {
+            gid.set_msb(gid.get_msb() | gid_type::is_migratable);
+        }
+
+        ///////////////////////////////////////////////////////////////////////
         inline std::int64_t get_credit_from_gid(gid_type const& id) HPX_PURE;
 
         inline std::int16_t get_log2credit_from_gid(gid_type const& id)
@@ -545,15 +609,49 @@ namespace hpx { namespace naming
             return id;
         }
 
+        inline std::uint64_t strip_internal_bits_and_component_type_from_gid(
+            std::uint64_t msb)
+        {
+            return msb &
+                ~(gid_type::internal_bits_mask | gid_type::component_type_mask);
+        }
+
+        inline gid_type& strip_internal_bits_and_component_type_from_gid(
+            gid_type& id)
+        {
+            id.set_msb(
+                strip_internal_bits_and_component_type_from_gid(id.get_msb()));
+            return id;
+        }
+
         inline std::uint64_t get_internal_bits(std::uint64_t msb)
         {
-            return msb & gid_type::internal_bits_mask;
+            return msb &
+                (gid_type::internal_bits_mask | gid_type::component_type_mask);
         }
 
         inline std::uint64_t strip_internal_bits_and_locality_from_gid(
                 std::uint64_t msb)
         {
-            return msb & ~gid_type::special_bits_mask;
+            return msb &
+                (~gid_type::special_bits_mask | gid_type::component_type_mask);
+        }
+
+        ///////////////////////////////////////////////////////////////////////
+        inline std::uint32_t get_component_type_from_gid(std::uint64_t msb)
+        {
+            HPX_ASSERT(!(msb & gid_type::dynamically_assigned));
+            return (msb >> gid_type::component_type_shift) &
+                gid_type::component_type_base_mask;
+        }
+
+        inline std::uint64_t add_component_type_to_gid(std::uint64_t msb,
+            std::uint32_t type)
+        {
+            HPX_ASSERT(!(msb & gid_type::dynamically_assigned));
+            return (msb & ~gid_type::component_type_mask) |
+                ((type << gid_type::component_type_shift) &
+                    gid_type::component_type_mask);
         }
 
         ///////////////////////////////////////////////////////////////////////
@@ -700,31 +798,45 @@ namespace hpx { namespace naming
 
         private:
             typedef void (*deleter_type)(detail::id_type_impl*);
-            static deleter_type get_deleter(id_type_management t);
+            static deleter_type get_deleter(id_type_management t) noexcept;
 
         public:
-            id_type_impl()
+            // This is a tag type used to convey the information that the caller is
+            // _not_ going to addref the future_data instance
+            struct init_no_addref {};
+
+            // called by serialization, needs to start off with a reference
+            // count of zero
+            id_type_impl() noexcept
               : count_(0), type_(unknown_deleter)
             {}
 
-            explicit id_type_impl (std::uint64_t lsb_id, id_type_management t)
-              : gid_type(0, lsb_id), count_(0), type_(t)
+            explicit id_type_impl(init_no_addref,
+                    std::uint64_t lsb_id, id_type_management t) noexcept
+              : gid_type(0, lsb_id)
+              , count_(1)
+              , type_(t)
             {}
 
-            explicit id_type_impl (std::uint64_t msb_id, std::uint64_t lsb_id,
-                    id_type_management t)
-              : gid_type(msb_id, lsb_id), count_(0), type_(t)
+            explicit id_type_impl(init_no_addref, std::uint64_t msb_id,
+                    std::uint64_t lsb_id, id_type_management t) noexcept
+              : gid_type(msb_id, lsb_id)
+              , count_(1)
+              , type_(t)
             {}
 
-            explicit id_type_impl (gid_type const& gid, id_type_management t)
-              : gid_type(gid), count_(0), type_(t)
+            explicit id_type_impl(init_no_addref, gid_type const& gid,
+                    id_type_management t) noexcept
+              : gid_type(gid)
+              , count_(1)
+              , type_(t)
             {}
 
-            id_type_management get_management_type() const
+            id_type_management get_management_type() const noexcept
             {
                 return type_;
             }
-            void set_management_type(id_type_management type)
+            void set_management_type(id_type_management type) noexcept
             {
                 type_ = type;
             }
@@ -735,6 +847,31 @@ namespace hpx { namespace naming
             void load(serialization::input_archive& ar, unsigned);
 
             HPX_SERIALIZATION_SPLIT_MEMBER()
+
+            // custom allocator support
+            static void* operator new(std::size_t size)
+            {
+                if (size != sizeof(id_type_impl))
+                {
+                    return ::operator new (size);
+                }
+                return alloc_.allocate(1);
+            }
+
+            static void operator delete(void *p, std::size_t size)
+            {
+                if (p == nullptr)
+                {
+                    return;
+                }
+
+                if (size != sizeof(id_type_impl))
+                {
+                    return ::operator delete (p);
+                }
+
+                return alloc_.deallocate(static_cast<id_type_impl*>(p), 1);
+            }
 
         private:
             // credit management (called during serialization), this function
@@ -747,11 +884,10 @@ namespace hpx { namespace naming
 
             util::atomic_count count_;
             id_type_management type_;
+
+            static util::internal_allocator<id_type_impl> alloc_;
         };
     }
-
-    ///////////////////////////////////////////////////////////////////////////
-    HPX_API_EXPORT gid_type get_parcel_dest_gid(id_type const& id);
 }}
 
 #include <hpx/runtime/naming/id_type.hpp>
@@ -862,13 +998,10 @@ namespace std
     template <>
     struct hash<hpx::naming::gid_type>
     {
-        typedef hpx::naming::gid_type argument_type;
-        typedef std::size_t result_type;
-
-        result_type operator()(argument_type const& gid) const
+        std::size_t operator()(::hpx::naming::gid_type const& gid) const
         {
-            result_type const h1 (std::hash<std::uint64_t>()(gid.get_lsb()));
-            result_type const h2 (std::hash<std::uint64_t>()(
+            std::size_t const h1 (std::hash<std::uint64_t>()(gid.get_lsb()));
+            std::size_t const h2 (std::hash<std::uint64_t>()(
                 hpx::naming::detail::strip_internal_bits_from_gid(gid.get_msb())));
             return h1 ^ (h2 << 1);
         }

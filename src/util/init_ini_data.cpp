@@ -9,8 +9,8 @@
 #include <hpx/exception.hpp>
 #include <hpx/plugins/plugin_registry_base.hpp>
 #include <hpx/runtime/components/component_registry_base.hpp>
+#include <hpx/runtime/startup_function.hpp>
 #include <hpx/util/assert.hpp>
-#include <hpx/util/filesystem_compatibility.hpp>
 #include <hpx/util/ini.hpp>
 #include <hpx/util/init_ini_data.hpp>
 #include <hpx/util/logging.hpp>
@@ -59,9 +59,9 @@ namespace hpx { namespace util
         if (nullptr != env) {
             namespace fs = boost::filesystem;
 
-            fs::path inipath (hpx::util::create_path(env));
+            fs::path inipath (env);
             if (nullptr != file_suffix)
-                inipath /= hpx::util::create_path(file_suffix);
+                inipath /= fs::path(file_suffix);
 
             if (handle_ini_file(ini, inipath.string())) {
                 LBT_(info) << "loaded configuration (${" << env_var << "}): "
@@ -187,7 +187,7 @@ namespace hpx { namespace util
         {
             try {
                 fs::directory_iterator nodir;
-                fs::path this_path (hpx::util::create_path(*it));
+                fs::path this_path (*it);
 
                 boost::system::error_code ec;
                 if (!fs::exists(this_path, ec) || ec)
@@ -222,16 +222,18 @@ namespace hpx { namespace util
     ///////////////////////////////////////////////////////////////////////////
     // iterate over all shared libraries in the given directory and construct
     // default ini settings assuming all of those are components
-    void load_component_factory_static(util::section& ini, std::string name,
+    std::vector<std::shared_ptr<components::component_registry_base>>
+    load_component_factory_static(util::section& ini, std::string name,
         hpx::util::plugin::get_plugins_list_type get_factory, error_code& ec)
     {
         hpx::util::plugin::static_plugin_factory<
             components::component_registry_base> pf(get_factory);
+        std::vector<std::shared_ptr<components::component_registry_base>> registries;
 
         // retrieve the names of all known registries
         std::vector<std::string> names;
         pf.get_names(names, ec);
-        if (ec) return;
+        if (ec) return registries;
 
         std::vector<std::string> ini_data;
         if (names.empty()) {
@@ -251,21 +253,24 @@ namespace hpx { namespace util
             ini_data += "static = 1";
         }
         else {
+            registries.reserve(names.size());
             // ask all registries
             for (std::string const& s : names)
             {
                 // create the component registry object
-                std::shared_ptr<components::component_registry_base>
-                    registry (pf.create(s, ec));
+                std::shared_ptr<components::component_registry_base> registry(
+                    pf.create(s, ec));
                 if (ec) continue;
 
                 registry->get_component_info(ini_data, "", true);
+                registries.push_back(registry);
             }
         }
 
         // incorporate all information from this module's
         // registry into our internal ini object
         ini.parse("<component registry>", ini_data, false, false);
+        return registries;
     }
 
     void load_component_factory(hpx::util::plugin::dll& d, util::section& ini,
@@ -306,6 +311,10 @@ namespace hpx { namespace util
                 if (ec) return;
 
                 registry->get_component_info(ini_data, curr);
+                hpx::register_startup_function([registry]()
+                {
+                    registry->register_component_type();
+                });
             }
         }
 
@@ -389,7 +398,7 @@ namespace hpx { namespace util
         std::vector<std::pair<fs::path, std::string> > libdata;
         try {
             fs::directory_iterator nodir;
-            fs::path libs_path (hpx::util::create_path(libs));
+            fs::path libs_path(libs);
 
             boost::system::error_code ec;
             if (!fs::exists(libs_path, ec) || ec)
@@ -428,7 +437,8 @@ namespace hpx { namespace util
 #endif
                 // ensure base directory, remove symlinks, etc.
                 boost::system::error_code fsec;
-                fs::path canonical_curr = util::canonical_path(curr, fsec);
+                fs::path canonical_curr =
+                    fs::canonical(curr, fs::initial_path(), fsec);
                 if (fsec)
                     canonical_curr = curr;
 
@@ -469,6 +479,8 @@ namespace hpx { namespace util
         typedef std::pair<fs::path, std::string> libdata_type;
         for (libdata_type const& p : libdata)
         {
+            LRT_(info) << "attempting to load: " << p.first.string();
+
             // get the handle of the library
             error_code ec(lightweight);
             hpx::util::plugin::dll d(p.first.string(), p.second);
@@ -480,6 +492,8 @@ namespace hpx { namespace util
                 continue;
             }
 
+            bool must_keep_loaded = false;
+
             // get the component factory
             std::string curr_fullname(p.first.parent_path().string());
             load_component_factory(d, ini, curr_fullname, p.second, ec);
@@ -490,22 +504,35 @@ namespace hpx { namespace util
                     << ": " << get_error_what(ec);
                 ec = error_code(lightweight);   // reinit ec
             }
+            else {
+                LRT_(debug)
+                    << "load_component_factory succeeded: " << p.first.string();
+                must_keep_loaded = true;
+            }
 
             // get the plugin factory
             plugin_list_type tmp_regs =
                 load_plugin_factory(d, ini, curr_fullname, p.second, ec);
 
-            std::copy(tmp_regs.begin(), tmp_regs.end(),
-                std::back_inserter(plugin_registries));
             if (ec) {
                 LRT_(info)
                     << "skipping (load_plugin_factory failed): "
                     << p.first.string()
                     << ": " << get_error_what(ec);
             }
+            else {
+                LRT_(debug)
+                    << "load_plugin_factory succeeded: " << p.first.string();
+
+                std::copy(tmp_regs.begin(), tmp_regs.end(),
+                    std::back_inserter(plugin_registries));
+                must_keep_loaded = true;
+            }
 
             // store loaded library for future use
-            modules.insert(std::make_pair(p.second, std::move(d)));
+            if (must_keep_loaded) {
+                modules.insert(std::make_pair(p.second, std::move(d)));
+            }
         }
         return plugin_registries;
     }

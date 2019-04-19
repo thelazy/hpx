@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2016 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -6,6 +6,7 @@
 #include <hpx/config.hpp>
 #include <hpx/async.hpp>
 #include <hpx/apply.hpp>
+#include <hpx/performance_counters/counters.hpp>
 #include <hpx/performance_counters/stubs/performance_counter.hpp>
 #include <hpx/runtime/actions/continuation.hpp>
 
@@ -78,6 +79,14 @@ namespace hpx { namespace performance_counters { namespace stubs
         return hpx::async<action_type>(targetid);
     }
 
+    lcos::future<void> performance_counter::reinit(launch::async_policy,
+        naming::id_type const& targetid, bool reset)
+    {
+        typedef server::base_performance_counter::reinit_action
+            action_type;
+        return hpx::async<action_type>(targetid, reset);
+    }
+
     bool performance_counter::start(launch::sync_policy,
         naming::id_type const& targetid, error_code& ec)
     {
@@ -94,5 +103,11 @@ namespace hpx { namespace performance_counters { namespace stubs
         naming::id_type const& targetid, error_code& ec)
     {
         reset(launch::async, targetid).get(ec);
+    }
+
+    void performance_counter::reinit(launch::sync_policy,
+        naming::id_type const& targetid, bool reset, error_code& ec)
+    {
+        reinit(launch::async, targetid, reset).get(ec);
     }
 }}}

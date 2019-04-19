@@ -8,6 +8,7 @@
 #define HPX_RUNTIME_ACTIONS_CONTINUATION_JUN_13_2008_1031AM
 
 #include <hpx/config.hpp>
+#include <hpx/pp/stringize.hpp>
 #include <hpx/runtime/actions/action_priority.hpp>
 #include <hpx/runtime/actions/basic_action_fwd.hpp>
 #include <hpx/runtime/actions/continuation_fwd.hpp>
@@ -23,8 +24,6 @@
 #include <hpx/traits/future_traits.hpp>
 #include <hpx/traits/is_continuation.hpp>
 #include <hpx/util/decay.hpp>
-#include <hpx/util/demangle_helper.hpp>
-#include <hpx/util/detail/pp/stringize.hpp>
 #include <hpx/util/logging.hpp>
 #include <hpx/util/unique_function.hpp>
 
@@ -163,7 +162,7 @@ namespace hpx { namespace actions
 
         typed_continuation& operator=(typed_continuation&& o)
         {
-            continuation::operator=(std::move(o));
+            continuation::operator=(std::move(static_cast<continuation&&>(o)));
             f_ = std::move(o.f_);
             return *this;
         }
@@ -392,7 +391,7 @@ namespace hpx { namespace actions
 
         typed_continuation& operator=(typed_continuation&& o)
         {
-            continuation::operator=(std::move(o));
+            continuation::operator=(std::move(static_cast<continuation&&>(o)));
             f_ = std::move(o.f_);
             return *this;
         }

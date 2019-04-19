@@ -1,14 +1,13 @@
 # Copyright (c) 2014      Thomas Heller
-# Copyright (c) 2007-2017 Hartmut Kaiser
+# Copyright (c) 2007-2018 Hartmut Kaiser
 # Copyright (c) 2011      Bryce Lelbach
 #
 # Distributed under the Boost Software License, Version 1.0. (See accompanying
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 cmake_policy(PUSH)
-if(POLICY CMP0054)
-  cmake_policy(SET CMP0054 NEW)
-endif()
+
+hpx_set_cmake_policy(CMP0054 NEW)
 
 function(hpx_setup_target target)
   # retrieve arguments
@@ -17,8 +16,7 @@ function(hpx_setup_target target)
   set(multi_value_args DEPENDENCIES COMPONENT_DEPENDENCIES COMPILE_FLAGS LINK_FLAGS INSTALL_FLAGS)
   cmake_parse_arguments(target "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
-  hpx_is_target(is_target ${target})
-  if(NOT is_target)
+  if(NOT TARGET ${target})
     hpx_error("${target} does not represent a target")
   endif()
 
@@ -81,15 +79,9 @@ function(hpx_setup_target target)
   if(HPX_WITH_STATIC_LINKING)
     set(target_STATIC_LINKING ON)
   else()
-    if(POLICY CMP0045)
-      cmake_policy(PUSH)
-      cmake_policy(SET CMP0045 OLD)
-    endif()
-
-    get_target_property(_hpx_library_type hpx TYPE)
-
-    if(POLICY CMP0045)
-      cmake_policy(POP)
+    set(_hpx_library_type)
+    if(TARGET hpx)
+      get_target_property(_hpx_library_type hpx TYPE)
     endif()
 
     if("${_hpx_library_type}" STREQUAL "STATIC_LIBRARY")
@@ -194,9 +186,17 @@ function(hpx_setup_target target)
     set(_USE_CONFIG 0)
   endif()
 
-  # linker instructions
   if(NOT target_NOLIBS)
-    set(hpx_libs hpx)
+    if(HPX_WITH_DYNAMIC_HPX_MAIN AND ("${_type}" STREQUAL "EXECUTABLE"))
+      if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
+        set(hpx_libs hpx_wrap)
+        set_target_properties(${target} PROPERTIES LINK_FLAGS "-Wl,-wrap=main")
+      elseif(APPLE)
+        set(hpx_libs hpx_wrap)
+        set_target_properties(${target} PROPERTIES LINK_FLAGS "-Wl,-e,_initialize_main")
+      endif()
+    endif()
+    set(hpx_libs ${hpx_libs} hpx)
     if(NOT target_STATIC_LINKING)
       set(hpx_libs ${hpx_libs})
       if(NOT nohpxinit)
@@ -216,6 +216,10 @@ function(hpx_setup_target target)
   endif()
 
   target_link_libraries(${target} ${HPX_TLL_PUBLIC} ${hpx_libs} ${target_DEPENDENCIES})
+
+  if(TARGET hpx_internal_flags)
+    target_link_libraries(${target} PRIVATE hpx_internal_flags)
+  endif()
 
   get_target_property(target_EXCLUDE_FROM_ALL ${target} EXCLUDE_FROM_ALL)
 

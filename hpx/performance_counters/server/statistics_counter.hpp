@@ -13,10 +13,9 @@
 #include <hpx/runtime/naming/id_type.hpp>
 #include <hpx/util/interval_timer.hpp>
 
-#include <boost/smart_ptr/scoped_ptr.hpp>
-
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -82,15 +81,6 @@ namespace hpx { namespace performance_counters { namespace server
             base_type::finalize();
         }
 
-        static components::component_type get_component_type()
-        {
-            return base_type::get_component_type();
-        }
-        static void set_component_type(components::component_type t)
-        {
-            base_type::set_component_type(t);
-        }
-
     protected:
         bool evaluate_base_counter(counter_value& value);
         bool evaluate();
@@ -104,7 +94,7 @@ namespace hpx { namespace performance_counters { namespace server
         std::string base_counter_name_;   ///< name of base counter to be queried
         naming::id_type base_counter_id_;
 
-        boost::scoped_ptr<detail::counter_type_from_statistic_base> value_;
+        std::unique_ptr<detail::counter_type_from_statistic_base> value_;
         counter_value prev_value_;
         bool has_prev_value_;
 

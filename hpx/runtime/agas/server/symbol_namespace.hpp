@@ -44,11 +44,7 @@ struct HPX_EXPORT symbol_namespace
     // {{{ nested types
     typedef lcos::local::spinlock mutex_type;
     typedef components::fixed_component_base<symbol_namespace> base_type;
-
-    // FIXME: This signature should use id_type, not gid_type
-    typedef hpx::util::function<
-        void(std::string const&, naming::gid_type const&)
-    > iterate_names_function_type;
+    typedef std::map<std::string, naming::gid_type> iterate_names_return_type;
 
     typedef std::map<std::string, std::shared_ptr<naming::gid_type> >
         gid_table_type;
@@ -76,14 +72,15 @@ struct HPX_EXPORT symbol_namespace
             api_counter_data()
               : count_(0)
               , time_(0)
+              , enabled_(false)
             {}
 
             std::atomic<std::int64_t> count_;
             std::atomic<std::int64_t> time_;
+            bool enabled_;
         };
 
-        counter_data()
-        {}
+        counter_data() = default;
 
     public:
         // access current counter values
@@ -107,6 +104,8 @@ struct HPX_EXPORT symbol_namespace
         void increment_unbind_count();
         void increment_iterate_names_count();
         void increment_on_event_count();
+
+        void enable_all();
 
     private:
         friend struct update_time_on_exit;
@@ -154,7 +153,7 @@ struct HPX_EXPORT symbol_namespace
 
     naming::gid_type unbind(std::string const& key);
 
-    void iterate(iterate_names_function_type const& f);
+    iterate_names_return_type iterate(std::string const& pattern);
 
     bool on_event(
         std::string const& name

@@ -8,13 +8,14 @@
 
 #include <hpx/config.hpp>
 #include <hpx/exception_fwd.hpp>
-#include <hpx/performance_counters/counters.hpp>
+#include <hpx/performance_counters/counters_fwd.hpp>
 #include <hpx/util/function.hpp>
 
 #include <cstdint>
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx { namespace performance_counters
@@ -104,6 +105,11 @@ namespace hpx { namespace performance_counters
     ///
     HPX_API_EXPORT naming::gid_type locality_raw_counter_creator(
         counter_info const&, hpx::util::function_nonser<std::int64_t(bool)> const&,
+        error_code&);
+
+    HPX_API_EXPORT naming::gid_type locality_raw_values_counter_creator(
+        counter_info const&,
+        hpx::util::function_nonser<std::vector<std::int64_t>(bool)> const&,
         error_code&);
 
     ///////////////////////////////////////////////////////////////////////////

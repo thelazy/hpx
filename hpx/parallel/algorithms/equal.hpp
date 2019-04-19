@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -111,20 +111,20 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 util::cancellation_token<> tok;
                 auto f1 =
-                    [f, tok, policy](
+                    [f, tok](
                         zip_iterator it, std::size_t part_count
                     ) mutable -> bool
                     {
-                        HPX_UNUSED(policy);
-
                         util::loop_n<ExPolicy>(
                             it, part_count, tok,
                             [&f, &tok](zip_iterator const& curr)
                             {
-                                using hpx::util::get;
                                 reference t = *curr;
-                                if (!f(get<0>(t), get<1>(t)))
+                                if (!hpx::util::invoke(f, hpx::util::get<0>(t),
+                                        hpx::util::get<1>(t)))
+                                {
                                     tok.cancel();
+                                }
                             });
                         return !tok.was_cancelled();
                     };
@@ -229,20 +229,6 @@ namespace hpx { namespace parallel { inline namespace v1
     equal(ExPolicy&& policy, FwdIter1 first1, FwdIter1 last1,
         FwdIter2 first2, FwdIter2 last2, Pred && op = Pred())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Requires at least input iterator.");
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter2>::value),
-            "Requires at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Requires at least forward iterator.");
@@ -251,7 +237,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return detail::equal_binary().call(
             std::forward<ExPolicy>(policy), is_seq(),
@@ -299,20 +284,20 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 util::cancellation_token<> tok;
                 auto f1 =
-                    [f, tok, policy](
+                    [f, tok](
                         zip_iterator it, std::size_t part_count
                     ) mutable -> bool
                     {
-                        HPX_UNUSED(policy);
-
                         util::loop_n<ExPolicy>(
                             it, part_count, tok,
                             [&f, &tok](zip_iterator const& curr)
                             {
                                 reference t = *curr;
-                                using hpx::util::get;
-                                if (!f(get<0>(t), get<1>(t)))
+                                if (!hpx::util::invoke(f, hpx::util::get<0>(t),
+                                        hpx::util::get<1>(t)))
+                                {
                                     tok.cancel();
+                                }
                             });
                         return !tok.was_cancelled();
                     };
@@ -413,20 +398,6 @@ namespace hpx { namespace parallel { inline namespace v1
     equal(ExPolicy&& policy, FwdIter1 first1, FwdIter1 last1, FwdIter2 first2,
         Pred && op = Pred())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Requires at least input iterator.");
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter2>::value),
-            "Requires at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Requires at least forward iterator.");
@@ -435,7 +406,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return detail::equal().call(
             std::forward<ExPolicy>(policy), is_seq(),

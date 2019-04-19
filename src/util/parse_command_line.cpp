@@ -18,7 +18,6 @@
 #include <vector>
 
 #include <boost/filesystem.hpp>
-#include <boost/scoped_array.hpp>
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx { namespace util
@@ -304,11 +303,11 @@ namespace hpx { namespace util
 
     ///////////////////////////////////////////////////////////////////////////
     // parse the command line
-    bool parse_commandline(
-        util::section const& rtcfg,
+    bool parse_commandline(util::section const& rtcfg,
         boost::program_options::options_description const& app_options,
-        int argc, char** argv, boost::program_options::variables_map& vm,
-        std::size_t node, int error_mode, hpx::runtime_mode mode,
+        std::string const& arg0, std::vector<std::string> const& args,
+        boost::program_options::variables_map& vm, std::size_t node,
+        int error_mode, hpx::runtime_mode mode,
         boost::program_options::options_description* visible,
         std::vector<std::string>* unregistered_options)
     {
@@ -407,8 +406,8 @@ namespace hpx { namespace util
                 ("hpx:ignore-batch-env", "ignore batch environment variables")
                 ("hpx:expect-connecting-localities",
                   "this locality expects other localities to dynamically connect "
-                  "(implied if the number of initial localities is larger than 1)")
-#if defined(HPX_HAVE_HWLOC) || defined(HPX_WINDOWS)
+                  "(default: false if the number of localities is equal to one, "
+                  "true if the number of initial localities is larger than 1)")
                 ("hpx:pu-offset", value<std::size_t>(),
                   "the first processing unit this instance of HPX should be "
                   "run on (default: 0), valid for "
@@ -421,8 +420,6 @@ namespace hpx { namespace util
                   "--hpx:queuing=local, --hpx:queuing=abp-priority, "
                   "--hpx:queuing=static, --hpx:queuing=static-priority "
                   "and --hpx:queuing=local-priority only")
-#endif
-#if defined(HPX_HAVE_HWLOC)
                 ("hpx:affinity", value<std::string>(),
                   "the affinity domain the OS threads will be confined to, "
                   "possible values: pu, core, numa, machine (default: pu), valid for "
@@ -438,7 +435,6 @@ namespace hpx { namespace util
                 ("hpx:print-bind",
                   "print to the console the bit masks calculated from the "
                   "arguments specified to all --hpx:bind options.")
-#endif
                 ("hpx:threads", value<std::string>(),
                  "the number of operating system threads to spawn for this HPX "
                  "locality (default: 1, using 'all' will spawn one thread for "
@@ -450,13 +446,9 @@ namespace hpx { namespace util
                 ("hpx:queuing", value<std::string>(),
                   "the queue scheduling policy to use, options are "
                   "'local', 'local-priority-fifo','local-priority-lifo', "
-                  "'abp-priority', "
-                  "'hierarchy', 'static', 'static-priority', and "
-                  "'periodic-priority' (default: 'local-priority'; "
+                  "'abp-priority-fifo', 'abp-priority-lifo', 'static', and "
+                  "'static-priority' (default: 'local-priority'; "
                   "all option values can be abbreviated)")
-                ("hpx:hierarchy-arity", value<std::size_t>(),
-                  "the arity of the of the thread queue tree, valid for "
-                   "--hpx:queuing=hierarchy only (default: 2)")
                 ("hpx:high-priority-threads", value<std::size_t>(),
                   "the number of operating system threads maintaining a high "
                   "priority queue (default: number of OS threads), valid for "
@@ -501,6 +493,9 @@ namespace hpx { namespace util
                 ("hpx:debug-timing-log", value<std::string>()->implicit_value("cout"),
                   "enable all messages on the timing log channel and send all "
                   "timing logs to the target destination")
+                ("hpx:debug-app-log", value<std::string>()->implicit_value("cout"),
+                  "enable all messages on the application log channel and send all "
+                  "application logs to the target destination")
                 // enable debug output from command line handling
                 ("hpx:debug-clp", "debug command line processing")
 #if defined(_POSIX_VERSION) || defined(HPX_WINDOWS)
@@ -607,7 +602,7 @@ namespace hpx { namespace util
 
                 // parse command line, allow for unregistered options this point
                 parsed_options opts(detail::get_commandline_parser(
-                        command_line_parser(argc, argv)
+                        command_line_parser(args)
                             .options(desc_cmdline)
                             .positional(pd)
                             .style(unix_style)
@@ -630,7 +625,7 @@ namespace hpx { namespace util
             {
                 // parse command line, allow for unregistered options this point
                 parsed_options opts(detail::get_commandline_parser(
-                        command_line_parser(argc, argv)
+                        command_line_parser(args)
                             .options(desc_cmdline)
                             .style(unix_style)
                             .extra_parser(detail::option_parser(rtcfg, node)),
@@ -665,7 +660,7 @@ namespace hpx { namespace util
             notify(vm);
 
             detail::handle_generic_config_options(
-                argv[0], vm, desc_cfgfile, rtcfg, node, error_mode);
+                arg0, vm, desc_cfgfile, rtcfg, node, error_mode);
             detail::handle_config_options(
                 vm, desc_cfgfile, rtcfg, node, error_mode);
         }
@@ -681,6 +676,19 @@ namespace hpx { namespace util
     }
 
     ///////////////////////////////////////////////////////////////////////////
+    namespace detail
+    {
+        std::string extract_arg0(std::string const& cmdline)
+        {
+            std::string::size_type p = cmdline.find_first_of(" \t");
+            if (p != std::string::npos)
+            {
+                return cmdline.substr(0, p);
+            }
+            return cmdline;
+        }
+    }
+
     bool parse_commandline(
         util::section const& rtcfg,
         boost::program_options::options_description const& app_options,
@@ -695,15 +703,9 @@ namespace hpx { namespace util
 #else
         std::vector<std::string> args = split_unix(cmdline);
 #endif
-
-        boost::scoped_array<char*> argv(new char* [args.size()+1]);
-        for (std::size_t i = 0; i < args.size(); ++i)
-            argv[i] = const_cast<char*>(args[i].c_str());
-        argv[args.size()] = nullptr;
-
-        return parse_commandline(
-            rtcfg, app_options, static_cast<int>(args.size()), argv.get(), vm,
-            node, error_mode, mode, visible, unregistered_options);
+        return parse_commandline(rtcfg, app_options,
+            detail::extract_arg0(cmdline), args, vm, node, error_mode, mode,
+            visible, unregistered_options);
     }
 
     ///////////////////////////////////////////////////////////////////////////

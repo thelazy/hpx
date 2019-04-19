@@ -10,9 +10,11 @@
 
 #include <hpx/config.hpp>
 #include <hpx/lcos/base_lco_with_value.hpp>
+#include <hpx/lcos/local/promise.hpp>
 #include <hpx/lcos/detail/future_data.hpp>
 #include <hpx/runtime/components/component_type.hpp>
 #include <hpx/runtime/components/server/managed_component_base.hpp>
+#include <hpx/runtime/components/server/component_heap.hpp>
 #include <hpx/runtime/naming/id_type.hpp>
 #include <hpx/traits/component_type_database.hpp>
 #include <hpx/util/assert.hpp>
@@ -71,7 +73,7 @@ namespace lcos {
             void set_value(RemoteResult&& result)
             {
                 HPX_ASSERT(shared_state_);
-                shared_state_->set_data(std::move(result));
+                shared_state_->set_remote_data(std::move(result));
             }
 
             void set_exception(std::exception_ptr const& e)
@@ -94,13 +96,13 @@ namespace lcos {
         private:
             // intrusive reference counting, noop since we don't require
             // reference counting here.
-            friend void intrusive_ptr_add_ref(promise_lco_base* p)
+            friend void intrusive_ptr_add_ref(promise_lco_base* /*p*/)
             {
             }
 
             // intrusive reference counting, noop since we don't require
             // reference counting here.
-            friend void intrusive_ptr_release(promise_lco_base* p)
+            friend void intrusive_ptr_release(promise_lco_base* /*p*/)
             {
             }
         };
@@ -219,6 +221,30 @@ namespace traits {
         lcos::detail::promise_lco<Result, RemoteResult>>::value =
         components::component_invalid;
 }
+namespace components { namespace detail {
+    // Forward declare promise_lco<void> to avoid duplicate instantiations
+    template <> HPX_ALWAYS_EXPORT
+    hpx::components::managed_component<
+        lcos::detail::promise_lco<void, hpx::util::unused_type>>::heap_type&
+    component_heap_helper<hpx::components::managed_component<
+        lcos::detail::promise_lco<void, hpx::util::unused_type>>>(...);
+
+    template <typename Result, typename RemoteResult>
+    struct component_heap_impl<hpx::components::managed_component<
+        lcos::detail::promise_lco<Result, RemoteResult>>>
+    {
+        typedef void valid;
+
+        HPX_ALWAYS_EXPORT static
+        typename hpx::components::managed_component<
+            lcos::detail::promise_lco<Result, RemoteResult>>::heap_type& call()
+        {
+            util::reinitializable_static<typename hpx::components::managed_component<
+                lcos::detail::promise_lco<Result, RemoteResult>>::heap_type> heap;
+            return heap.get();
+        }
+    };
+}}
 }
 
 #endif

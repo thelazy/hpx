@@ -10,8 +10,9 @@ set(tests
     serialization_complex
     serialization_custom_constructor
     serialization_deque
-    serialization_map
     serialization_list
+    serialization_map
+    serialization_optional
     serialization_set
     serialization_simple
     serialization_smart_ptr
@@ -20,8 +21,15 @@ set(tests
     serialization_partitioned_vector
     serialization_variant
     serialize_buffer
+    serialize_with_incompatible_signature
     zero_copy_serialization
 )
+
+if(HPX_WITH_CXX17_STRUCTURED_BINDINGS)
+    set(tests ${tests}
+        serialization_brace_initializable
+)
+endif()
 
 add_subdirectory(polymorphic)
 
@@ -53,17 +61,24 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.unit.serialization.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()
 
 if(HPX_WITH_COMPILE_ONLY_TESTS)
   # add compile time tests
   set(compile_tests
-      fail_compile_non_serializable_class
       succeed_compile_empty_class
      )
 
-  set(fail_compile_non_serializable_class_FLAGS FAILURE_EXPECTED)
+  if(HPX_WITH_FAIL_COMPILE_TESTS)
+    set(fail_compile_tests
+       )
+    foreach(fail_compile_test ${fail_compile_tests})
+      set(${fail_compile_test}_FLAGS FAILURE_EXPECTED)
+    endforeach()
+
+    set(compile_tests ${compile_tests} ${fail_compile_tests})
+  endif()
 
   foreach(compile_test ${compile_tests})
     set(sources

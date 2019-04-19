@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //  Copyright (c) 2011 Bryce Lelbach
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -16,46 +16,35 @@
 
 #include <hpx/config/attributes.hpp>
 #include <hpx/config/branch_hints.hpp>
+#include <hpx/config/compiler_fence.hpp>
+#include <hpx/config/compiler_native_tls.hpp>
 #include <hpx/config/compiler_specific.hpp>
 #include <hpx/config/constexpr.hpp>
+#include <hpx/config/debug.hpp>
 #include <hpx/config/defines.hpp>
 #include <hpx/config/emulate_deleted.hpp>
 #include <hpx/config/export_definitions.hpp>
 #include <hpx/config/forceinline.hpp>
+#include <hpx/config/lambda_capture.hpp>
 #include <hpx/config/manual_profiling.hpp>
+#include <hpx/config/threads_stack.hpp>
 #include <hpx/config/version.hpp>
+#include <hpx/config/weak_symbol.hpp>
 
 #include <boost/version.hpp>
 
-#if BOOST_VERSION < 105500
+#if BOOST_VERSION < 106100
 // Please update your Boost installation (see www.boost.org for details).
-#error HPX cannot be compiled with a Boost version earlier than 1.55.0
+#error HPX cannot be compiled with a Boost version earlier than 1.61.0
 #endif
 
-#include <hpx/util/detail/pp/cat.hpp>
-#include <hpx/util/detail/pp/stringize.hpp>
+#include <hpx/pp/cat.hpp>
+#include <hpx/pp/stringize.hpp>
 
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32__)
 // On Windows, make sure winsock.h is not included even if windows.h is
 // included before winsock2.h
 #define _WINSOCKAPI_
-#endif
-
-///////////////////////////////////////////////////////////////////////////////
-// Make sure DEBUG macro is defined consistently across platforms
-#if defined(_DEBUG) && !defined(DEBUG)
-#  define DEBUG
-#endif
-
-///////////////////////////////////////////////////////////////////////////////
-#if defined(DEBUG) && !defined(HPX_DEBUG)
-#  define HPX_DEBUG
-#endif
-
-#if defined(HPX_DEBUG)
-#  define HPX_BUILD_TYPE debug
-#else
-#  define HPX_BUILD_TYPE release
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -382,6 +371,14 @@
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
+// Maximum sleep time for idle backoff in milliseconds.
+#if defined(HPX_HAVE_THREAD_MANAGER_IDLE_BACKOFF)
+#  if !defined(HPX_IDLE_BACKOFF_TIME_MAX)
+#    define HPX_IDLE_BACKOFF_TIME_MAX 1000
+#  endif
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
 #if !defined(HPX_WRAPPER_HEAP_STEP)
 #  define HPX_WRAPPER_HEAP_STEP 0xFFFFU
 #endif
@@ -399,62 +396,10 @@
 #  endif
 #endif
 
-#if !defined(HPX_HAVE_VERIFY_LOCKS_GLOBALY)
+#if !defined(HPX_HAVE_VERIFY_LOCKS_GLOBALLY)
 #  if defined(HPX_DEBUG)
-#    define HPX_HAVE_VERIFY_LOCKS_GLOBALY
+#    define HPX_HAVE_VERIFY_LOCKS_GLOBALLY
 #  endif
-#endif
-
-///////////////////////////////////////////////////////////////////////////////
-
-#if !defined(HPX_THREADS_STACK_OVERHEAD)
-#  if defined(HPX_DEBUG)
-#    if defined(HPX_GCC_VERSION)
-#      define HPX_THREADS_STACK_OVERHEAD 0x3000
-#    else
-#      define HPX_THREADS_STACK_OVERHEAD 0x2800
-#    endif
-#  else
-#    if defined(HPX_INTEL_VERSION)
-#      define HPX_THREADS_STACK_OVERHEAD 0x2800
-#    else
-#      define HPX_THREADS_STACK_OVERHEAD 0x800
-#    endif
-#  endif
-#endif
-
-#if !defined(HPX_SMALL_STACK_SIZE)
-#  if defined(__has_feature)
-#    if __has_feature(address_sanitizer)
-#      define HPX_SMALL_STACK_SIZE  0x20000       // 128kByte
-#    endif
-#  endif
-#endif
-
-#if !defined(HPX_SMALL_STACK_SIZE)
-#  if defined(HPX_WINDOWS) && !defined(HPX_HAVE_GENERIC_CONTEXT_COROUTINES)
-#    define HPX_SMALL_STACK_SIZE    0x4000        // 16kByte
-#  else
-#    if defined(HPX_DEBUG)
-#      define HPX_SMALL_STACK_SIZE  0x20000       // 128kByte
-#    else
-#      if defined(__powerpc__) || defined(__INTEL_COMPILER)
-#         define HPX_SMALL_STACK_SIZE  0x20000       // 128kByte
-#      else
-#         define HPX_SMALL_STACK_SIZE  0x10000        // 64kByte
-#      endif
-#    endif
-#  endif
-#endif
-
-#if !defined(HPX_MEDIUM_STACK_SIZE)
-#  define HPX_MEDIUM_STACK_SIZE   0x0020000       // 128kByte
-#endif
-#if !defined(HPX_LARGE_STACK_SIZE)
-#  define HPX_LARGE_STACK_SIZE    0x0200000       // 2MByte
-#endif
-#if !defined(HPX_HUGE_STACK_SIZE)
-#  define HPX_HUGE_STACK_SIZE     0x2000000       // 32MByte
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -64,7 +64,6 @@ set(HPX_HIDDEN_VISIBILITY OFF CACHE BOOL "")
 #
 set(BOOST_ROOT "/gpfs/bbp.cscs.ch/home/biddisco/apps/gcc-4.8.2/boost_1_56_0")
 set(HWLOC_ROOT "/gpfs/bbp.cscs.ch/home/biddisco/apps/gcc-4.8.2/hwloc-1.8.1")
-set(HPX_WITH_HWLOC ON CACHE BOOL "Use hwloc")
 
 set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Default build")
 
@@ -76,6 +75,7 @@ set(HPX_WITH_TESTS                ON  CACHE BOOL "Testing enabled by default")
 set(HPX_WITH_TESTS_BENCHMARKS     ON  CACHE BOOL "Testing enabled by default")
 set(HPX_WITH_TESTS_REGRESSIONS    ON  CACHE BOOL "Testing enabled by default")
 set(HPX_WITH_TESTS_UNIT           ON  CACHE BOOL "Testing enabled by default")
+set(HPX_WITH_TESTS_EXAMPLES       ON  CACHE BOOL "Testing enabled by default")
 set(HPX_WITH_TESTS_EXTERNAL_BUILD OFF CACHE BOOL "Turn off build of cmake build tests")
 set(DART_TESTING_TIMEOUT           45  CACHE STRING "Life is too short")
 

@@ -42,7 +42,7 @@ namespace hpx { namespace performance_counters { namespace papi { namespace util
         if (rc != ok)
         {
             HPX_THROW_EXCEPTION(hpx::no_success, fname,
-                hpx::util::format("%s (%s)", info, PAPI_strerror(rc)));
+                hpx::util::format("{} ({})", info, PAPI_strerror(rc)));
         }
     }
     inline void papi_call(int rc, std::string const& info, char const *fname,
@@ -91,9 +91,9 @@ namespace hpx { namespace performance_counters { namespace papi { namespace util
 
         PAPI_event_info_t const *operator()()
         {
-            if (!active_) return 0;
+            if (!active_) return nullptr;
             while (!get_info())
-                if (!(active_ = get_next_event())) return 0;
+                if (!(active_ = get_next_event())) return nullptr;
             active_ = get_next_event();
             return &info_;
         }

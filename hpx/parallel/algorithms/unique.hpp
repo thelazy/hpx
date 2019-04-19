@@ -110,14 +110,11 @@ namespace hpx { namespace parallel { inline namespace v1
                     > scan_partitioner_type;
 
                 auto f1 =
-                    [pred, proj, flags, policy]
-                    (
-                       zip_iterator part_begin, std::size_t part_size
-                    )   -> std::size_t
+                    [HPX_CAPTURE_FORWARD(pred),
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](zip_iterator part_begin, std::size_t part_size)
+                    -> std::size_t
                     {
-                        HPX_UNUSED(flags);
-                        HPX_UNUSED(policy);
-
                         FwdIter base = get<0>(part_begin.get_iterator_tuple());
 
                         // MSVC complains if pred or proj is captured by ref below
@@ -141,17 +138,15 @@ namespace hpx { namespace parallel { inline namespace v1
                         return 0u;
                     };
 
-                std::shared_ptr<FwdIter> dest_ptr =
-                    std::make_shared<FwdIter>(first);
+                std::shared_ptr<FwdIter> dest_ptr = std::make_shared<FwdIter>(first);
                 auto f3 =
-                    [dest_ptr, flags, policy](
+                    [dest_ptr, flags](
                         zip_iterator part_begin, std::size_t part_size,
                         hpx::shared_future<std::size_t> curr,
                         hpx::shared_future<std::size_t> next
                     ) mutable -> void
                     {
                         HPX_UNUSED(flags);
-                        HPX_UNUSED(policy);
 
                         curr.get();     // rethrow exceptions
                         next.get();     // rethrow exceptions
@@ -187,28 +182,8 @@ namespace hpx { namespace parallel { inline namespace v1
                         }
                     };
 
-                return scan_partitioner_type::call(
-                    std::forward<ExPolicy>(policy),
-                    make_zip_iterator(first, flags.get()),
-                    count - 1, init,
-                    // step 1 performs first part of scan algorithm
-                    std::move(f1),
-                    // step 2 propagates the partition results from left
-                    // to right
-                    hpx::util::unwrapping(
-                        [](std::size_t, std::size_t)
-                            -> std::size_t
-                        {
-                            // There is no need to propagate the partition
-                            // results. But, the scan_partitioner doesn't
-                            // support 'void' as Result1. So, unavoidably
-                            // return non-meaning value.
-                            return 0u;
-                        }),
-                    // step 3 runs final accumulation on each partition
-                    std::move(f3),
-                    // step 4 use this return value
-                    [dest_ptr, first, count, flags](
+                auto f4 =
+                    [HPX_CAPTURE_MOVE(dest_ptr), first, count, flags](
                         std::vector<hpx::shared_future<std::size_t> > &&,
                         std::vector<hpx::future<void> > &&) mutable
                     ->  FwdIter
@@ -222,7 +197,30 @@ namespace hpx { namespace parallel { inline namespace v1
                                 ++(*dest_ptr);
                         }
                         return *dest_ptr;
-                    });
+                    };
+
+                return scan_partitioner_type::call(
+                    std::forward<ExPolicy>(policy),
+                    make_zip_iterator(first, flags.get()), count - 1, init,
+                    // step 1 performs first part of scan algorithm
+                    std::move(f1),
+                    // step 2 propagates the partition results from left
+                    // to right
+                    [](hpx::shared_future<std::size_t> fut1,
+                        hpx::shared_future<std::size_t>
+                            fut2) -> std::size_t {
+                        fut1.get();
+                        fut2.get();    // propagate exceptions
+                        // There is no need to propagate the partition
+                        // results. But, the scan_partitioner doesn't
+                        // support 'void' as Result1. So, unavoidably
+                        // return non-meaning value.
+                        return 0u;
+                    },
+                    // step 3 runs final accumulation on each partition
+                    std::move(f3),
+                    // step 4 use this return value
+                    std::move(f4));
             }
         };
         /// \endcond
@@ -292,9 +290,8 @@ namespace hpx { namespace parallel { inline namespace v1
     ///           if the execution policy is of type
     ///           \a sequenced_task_policy or \a parallel_task_policy and
     ///           returns \a FwdIter otherwise.
-    ///           The \a unique algorithm returns the pair of
-    ///           the source iterator to \a last, and
-    ///           the destination iterator to the end of the \a dest range.
+    ///           The \a unique algorithm returns the iterator to the new end
+    ///           of the range.
     ///
     template <typename ExPolicy, typename FwdIter,
         typename Pred = detail::equal_to,
@@ -314,22 +311,11 @@ namespace hpx { namespace parallel { inline namespace v1
     unique(ExPolicy&& policy, FwdIter first, FwdIter last,
         Pred && pred = Pred(), Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter>::value),
-            "Required at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter>::value),
             "Required at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return detail::unique<FwdIter>().call(
                 std::forward<ExPolicy>(policy), is_seq(),
@@ -450,14 +436,11 @@ namespace hpx { namespace parallel { inline namespace v1
                     > scan_partitioner_type;
 
                 auto f1 =
-                    [pred, proj, flags, policy]
-                    (
-                        zip_iterator part_begin, std::size_t part_size
-                    )   -> std::size_t
+                    [HPX_CAPTURE_FORWARD(pred),
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](zip_iterator part_begin, std::size_t part_size)
+                    -> std::size_t
                     {
-                        HPX_UNUSED(flags);
-                        HPX_UNUSED(policy);
-
                         FwdIter1 base = get<0>(part_begin.get_iterator_tuple());
                         std::size_t curr = 0;
 
@@ -482,14 +465,13 @@ namespace hpx { namespace parallel { inline namespace v1
                         return curr;
                     };
                 auto f3 =
-                    [dest, flags, policy](
+                    [dest, flags](
                         zip_iterator part_begin, std::size_t part_size,
                         hpx::shared_future<std::size_t> curr,
                         hpx::shared_future<std::size_t> next
                     ) mutable -> void
                     {
                         HPX_UNUSED(flags);
-                        HPX_UNUSED(policy);
 
                         next.get();     // rethrow exceptions
 
@@ -503,8 +485,21 @@ namespace hpx { namespace parallel { inline namespace v1
                             });
                     };
 
+                auto f4 =
+                    [last, dest, flags](
+                        std::vector<hpx::shared_future<std::size_t> > && items,
+                        std::vector<hpx::future<void> > &&) mutable
+                    ->  std::pair<FwdIter1, FwdIter2>
+                    {
+                        HPX_UNUSED(flags);
+
+                        std::advance(dest, items.back().get());
+                        return std::make_pair(std::move(last), std::move(dest));
+                    };
+
                 return scan_partitioner_type::call(
                     std::forward<ExPolicy>(policy),
+                    //make_zip_iterator(first, flags.get() - 1),
                     make_zip_iterator(first, flags.get() - 1),
                     count - 1, init,
                     // step 1 performs first part of scan algorithm
@@ -515,16 +510,7 @@ namespace hpx { namespace parallel { inline namespace v1
                     // step 3 runs final accumulation on each partition
                     std::move(f3),
                     // step 4 use this return value
-                    [first, last, dest, flags, count](
-                        std::vector<hpx::shared_future<std::size_t> > && items,
-                        std::vector<hpx::future<void> > &&) mutable
-                    ->  std::pair<FwdIter1, FwdIter2>
-                    {
-                        HPX_UNUSED(flags);
-
-                        std::advance(dest, items.back().get());
-                        return std::make_pair(std::move(last), std::move(dest));
-                    });
+                    std::move(f4));
             }
         };
         /// \endcond
@@ -626,21 +612,6 @@ namespace hpx { namespace parallel { inline namespace v1
     unique_copy(ExPolicy&& policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest,
         Pred && pred = Pred(), Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Required at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value ||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Required at least forward iterator.");
@@ -649,8 +620,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
-
         typedef std::pair<FwdIter1, FwdIter2> result_type;
 
         return hpx::util::make_tagged_pair<tag::in, tag::out>(

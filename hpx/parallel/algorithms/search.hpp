@@ -16,6 +16,7 @@
 #include <hpx/parallel/algorithms/for_each.hpp>
 #include <hpx/parallel/execution_policy.hpp>
 #include <hpx/parallel/util/detail/algorithm_result.hpp>
+#include <hpx/parallel/util/compare_projected.hpp>
 #include <hpx/parallel/util/zip_iterator.hpp>
 
 #include <hpx/parallel/util/loop.hpp>
@@ -42,27 +43,36 @@ namespace hpx {namespace parallel { inline namespace v1
                 : search::algorithm("search")
             {}
 
-            template <typename ExPolicy, typename FwdIter2, typename Pred>
+            template <typename ExPolicy, typename FwdIter2, typename Pred,
+                typename Proj1, typename Proj2>
             static FwdIter
             sequential(ExPolicy, FwdIter first, FwdIter last,
-                FwdIter2 s_first, FwdIter2 s_last, Pred && op)
+                FwdIter2 s_first, FwdIter2 s_last, Pred && op,
+                Proj1 && proj1, Proj2 && proj2)
             {
-                return std::search(first, last, s_first, s_last, op);
+                return std::search(first, last, s_first, s_last,
+                    util::compare_projected<Pred, Proj1, Proj2>(op,
+                        proj1, proj2));
             }
 
-            template <typename ExPolicy, typename FwdIter2, typename Pred>
+            template <typename ExPolicy, typename FwdIter2, typename Pred,
+                typename Proj1, typename Proj2>
             static typename util::detail::algorithm_result<
                 ExPolicy, FwdIter
             >::type
             parallel(ExPolicy && policy, FwdIter first, FwdIter last,
-                FwdIter2 s_first, FwdIter2 s_last, Pred && op)
+                FwdIter2 s_first, FwdIter2 s_last, Pred && op,
+                Proj1 && proj1, Proj2 && proj2)
             {
-                typedef typename std::iterator_traits<FwdIter>::reference
-                    reference;
-                typedef typename std::iterator_traits<FwdIter>::difference_type
-                    difference_type;
-                typedef typename std::iterator_traits<FwdIter2>::difference_type
-                    s_difference_type;
+                using reference =
+                    typename std::iterator_traits<FwdIter>::reference;
+
+                using difference_type =
+                    typename std::iterator_traits<FwdIter>::difference_type;
+
+                using s_difference_type =
+                    typename std::iterator_traits<FwdIter2>::difference_type;
+
                 typedef util::detail::algorithm_result<ExPolicy, FwdIter> result;
 
                 s_difference_type diff = std::distance(s_first, s_last);
@@ -76,47 +86,58 @@ namespace hpx {namespace parallel { inline namespace v1
                 typedef util::partitioner<ExPolicy, FwdIter, void> partitioner;
 
                 util::cancellation_token<difference_type> tok(count);
-                return partitioner::call_with_index(
-                    std::forward<ExPolicy>(policy), first, count-(diff-1), 1,
-                    [=](FwdIter it, std::size_t part_size,
-                        std::size_t base_idx) mutable -> void
-                    {
-                        FwdIter curr = it;
 
-                        util::loop_idx_n(
-                            base_idx, it, part_size, tok,
-                            [=, &tok, &curr](reference v, std::size_t i) -> void
+                auto f1 = [diff, count, tok, s_first, HPX_CAPTURE_FORWARD(op),
+                              HPX_CAPTURE_FORWARD(proj1),
+                              HPX_CAPTURE_FORWARD(proj2)](FwdIter it,
+                              std::size_t part_size,
+                              std::size_t base_idx) mutable -> void {
+                    FwdIter curr = it;
+
+                    util::loop_idx_n(base_idx, it, part_size, tok,
+                        [diff, count, s_first, &tok, &curr,
+                            HPX_CAPTURE_FORWARD(op), HPX_CAPTURE_FORWARD(proj1),
+                            HPX_CAPTURE_FORWARD(proj2)](
+                            reference v, std::size_t i) -> void {
+                            ++curr;
+                            if (hpx::util::invoke(op,
+                                    hpx::util::invoke(proj1, v),
+                                    hpx::util::invoke(proj2, *s_first)))
                             {
-                                ++curr;
-                                if (op(v, *s_first))
+                                difference_type local_count = 1;
+                                FwdIter2 needle = s_first;
+                                FwdIter mid = curr;
+
+                                for (difference_type len = 0;
+                                     local_count != diff && len != count;
+                                     ++local_count, ++len, ++mid)
                                 {
-                                    difference_type local_count = 1;
-                                    FwdIter2 needle = s_first;
-                                    FwdIter mid = curr;
-
-                                    for(difference_type len = 0;
-                                        local_count != diff && len != count;
-                                        ++local_count, ++len, ++mid)
-                                    {
-                                        if(*mid != *++needle)
-                                            break;
-                                    }
-
-                                    if(local_count == diff)
-                                        tok.cancel(i);
+                                    if (!hpx::util::invoke(op,
+                                            hpx::util::invoke(proj1, *mid),
+                                            hpx::util::invoke(
+                                                proj2, *++needle)))
+                                        break;
                                 }
-                            });
-                    },
-                    [=](std::vector<hpx::future<void> > &&) mutable -> FwdIter
-                    {
-                        difference_type search_res = tok.get_data();
-                        if (search_res != count)
-                            std::advance(first, search_res);
-                        else
-                            first = last;
 
-                        return std::move(first);
-                    });
+                                if (local_count == diff)
+                                    tok.cancel(i);
+                            }
+                        });
+                };
+
+                auto f2 =
+                    [=](std::vector<hpx::future<void>>&&) mutable -> FwdIter {
+                    difference_type search_res = tok.get_data();
+                    if (search_res != count)
+                        std::advance(first, search_res);
+                    else
+                        first = last;
+
+                    return std::move(first);
+                };
+                return partitioner::call_with_index(
+                    std::forward<ExPolicy>(policy), first, count - (diff - 1),
+                    1, std::move(f1), std::move(f2));
             }
         };
         /// \endcond
@@ -133,11 +154,11 @@ namespace hpx {namespace parallel { inline namespace v1
     ///                     It describes the manner in which the execution
     ///                     of the algorithm may be parallelized and the manner
     ///                     in which it executes the assignments.
-    /// \tparam FwdIter      The type of the source iterators used for the
+    /// \tparam FwdIter     The type of the source iterators used for the
     ///                     first range (deduced).
     ///                     This iterator type must meet the requirements of an
     ///                     input iterator.
-    /// \tparam FwdIter2     The type of the source iterators used for the
+    /// \tparam FwdIter2    The type of the source iterators used for the
     ///                     second range (deduced).
     ///                     This iterator type must meet the requirements of an
     ///                     forward iterator.
@@ -146,6 +167,12 @@ namespace hpx {namespace parallel { inline namespace v1
     ///                     overload of \a adjacent_find requires \a Pred to meet the
     ///                     requirements of \a CopyConstructible. This defaults
     ///                     to std::equal_to<>
+    /// \tparam Proj1       The type of an optional projection function. This
+    ///                     defaults to \a util::projection_identity and is applied
+    ///                     to the elements of type dereferenced \a FwdIter.
+    /// \tparam Proj2       The type of an optional projection function. This
+    ///                     defaults to \a util::projection_identity and is applied
+    ///                     to the elements of type dereferenced \a FwdIter2.
     ///
     /// \param policy       The execution policy to use for the scheduling of
     ///                     the iterations.
@@ -169,6 +196,14 @@ namespace hpx {namespace parallel { inline namespace v1
     ///                     that objects of types \a FwdIter1 and \a FwdIter2 can
     ///                     be dereferenced and then implicitly converted to
     ///                     \a Type1 and \a Type2 respectively
+    /// \param proj1        Specifies the function (or function object) which
+    ///                     will be invoked for each of the elements of type
+    ///                     dereferenced \a FwdIter1 as a projection operation
+    ///                     before the actual predicate \a is invoked.
+    /// \param proj2        Specifies the function (or function object) which
+    ///                     will be invoked for each of the elements of type
+    ///                     dereferenced \a FwdIter2 as a projection operation
+    ///                     before the actual predicate \a is invoked.
     ///
     /// The comparison operations in the parallel \a search algorithm invoked
     /// with an execution policy object of type \a sequenced_policy
@@ -191,13 +226,25 @@ namespace hpx {namespace parallel { inline namespace v1
     ///           returned. If no subsequence is found, \a last is returned.
     ///
     template <typename ExPolicy, typename FwdIter, typename FwdIter2,
-        typename Pred = detail::equal_to>
-    inline typename std::enable_if<
-        execution::is_execution_policy<ExPolicy>::value,
-        typename util::detail::algorithm_result<ExPolicy, FwdIter>::type
-    >::type
+        typename Pred = detail::equal_to,
+        typename Proj1 = util::projection_identity,
+        typename Proj2 = util::projection_identity,
+    HPX_CONCEPT_REQUIRES_(
+        execution::is_execution_policy<ExPolicy>::value &&
+        hpx::traits::is_iterator<FwdIter>::value &&
+        traits::is_projected<Proj1, FwdIter>::value &&
+        hpx::traits::is_iterator<FwdIter2>::value &&
+        traits::is_projected<Proj2, FwdIter2>::value &&
+        traits::is_indirect_callable<
+            ExPolicy, Pred,
+            traits::projected<Proj1, FwdIter>,
+            traits::projected<Proj2, FwdIter2>
+        >::value
+    )>
+    typename util::detail::algorithm_result<ExPolicy, FwdIter>::type
     search(ExPolicy && policy, FwdIter first, FwdIter last,
-        FwdIter2 s_first, FwdIter2 s_last, Pred && op = Pred())
+        FwdIter2 s_first, FwdIter2 s_last, Pred && op = Pred(),
+        Proj1 && proj1 = Proj1(), Proj2 && proj2 = Proj2())
     {
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter>::value),
@@ -210,7 +257,8 @@ namespace hpx {namespace parallel { inline namespace v1
 
         return detail::search<FwdIter>().call(
             std::forward<ExPolicy>(policy), is_seq(),
-            first, last, s_first, s_last, std::forward<Pred>(op));
+            first, last, s_first, s_last, std::forward<Pred>(op),
+            std::forward<Proj1>(proj1), std::forward<Proj2>(proj2));
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -225,21 +273,27 @@ namespace hpx {namespace parallel { inline namespace v1
                 : search_n::algorithm("search_n")
             {}
 
-            template <typename ExPolicy, typename FwdIter2, typename Pred>
+            template <typename ExPolicy, typename FwdIter2, typename Pred,
+                typename Proj1, typename Proj2>
             static FwdIter
             sequential(ExPolicy, FwdIter first, std::size_t count,
-                FwdIter2 s_first, FwdIter2 s_last, Pred && op)
+                FwdIter2 s_first, FwdIter2 s_last, Pred && op,
+                Proj1 && proj1, Proj2 && proj2)
             {
                 return std::search(first, std::next(first, count),
-                    s_first, s_last, op);
+                    s_first, s_last,
+                    util::compare_projected<Pred, Proj1, Proj2>(op,
+                        proj1, proj2));
             }
 
-            template <typename ExPolicy, typename FwdIter2, typename Pred>
+            template <typename ExPolicy, typename FwdIter2, typename Pred,
+                typename Proj1, typename Proj2>
             static typename util::detail::algorithm_result<
                 ExPolicy, FwdIter
             >::type
             parallel(ExPolicy && policy, FwdIter first, std::size_t count,
-                FwdIter2 s_first, FwdIter2 s_last, Pred && op)
+                FwdIter2 s_first, FwdIter2 s_last, Pred && op,
+                Proj1 && proj1, Proj2 && proj2)
             {
                 typedef typename std::iterator_traits<FwdIter>::reference
                     reference;
@@ -259,46 +313,57 @@ namespace hpx {namespace parallel { inline namespace v1
                 typedef util::partitioner<ExPolicy, FwdIter, void> partitioner;
 
                 util::cancellation_token<difference_type> tok(count);
-                return partitioner::call_with_index(
-                    std::forward<ExPolicy>(policy), first, count-(diff-1), 1,
-                    [=](FwdIter it, std::size_t part_size,
-                        std::size_t base_idx) mutable -> void
-                    {
-                        FwdIter curr = it;
 
-                        util::loop_idx_n(
-                            base_idx, it, part_size, tok,
-                            [=, &tok, &curr](reference v, std::size_t i) -> void
+                auto f1 = [count, diff, tok, s_first, HPX_CAPTURE_FORWARD(op),
+                              HPX_CAPTURE_FORWARD(proj1),
+                              HPX_CAPTURE_FORWARD(proj2)](FwdIter it,
+                              std::size_t part_size,
+                              std::size_t base_idx) mutable -> void {
+                    FwdIter curr = it;
+
+                    util::loop_idx_n(base_idx, it, part_size, tok,
+                        [count, diff, s_first, &tok, &curr,
+                            HPX_CAPTURE_FORWARD(op), HPX_CAPTURE_FORWARD(proj1),
+                            HPX_CAPTURE_FORWARD(proj2)](
+                            reference v, std::size_t i) -> void {
+                            ++curr;
+                            if (hpx::util::invoke(op,
+                                    hpx::util::invoke(proj1, v),
+                                    hpx::util::invoke(proj2, *s_first)))
                             {
-                                ++curr;
-                                if (op(v, *s_first))
+                                difference_type local_count = 1;
+                                FwdIter2 needle = s_first;
+                                FwdIter mid = curr;
+
+                                for (difference_type len = 0;
+                                     local_count != diff &&
+                                     len != difference_type(count);
+                                     ++local_count, ++len, ++mid)
                                 {
-                                    difference_type local_count = 1;
-                                    FwdIter2 needle = s_first;
-                                    FwdIter mid = curr;
-
-                                    for(difference_type len = 0;
-                                        local_count != diff &&
-                                        len != difference_type(count);
-                                        ++local_count, ++len, ++mid)
-                                    {
-                                        if(*mid != *++needle)
-                                            break;
-                                    }
-
-                                    if(local_count == diff)
-                                        tok.cancel(i);
+                                    if (!hpx::util::invoke(op,
+                                            hpx::util::invoke(proj1, *mid),
+                                            hpx::util::invoke(
+                                                proj2, *++needle)))
+                                        break;
                                 }
-                            });
-                    },
-                    [=](std::vector<hpx::future<void> > &&) mutable -> FwdIter
-                    {
-                        difference_type search_res = tok.get_data();
-                        if(search_res != s_difference_type(count))
-                            std::advance(first, search_res);
 
-                        return std::move(first);
-                    });
+                                if (local_count == diff)
+                                    tok.cancel(i);
+                            }
+                        });
+                };
+
+                auto f2 =
+                    [=](std::vector<hpx::future<void>>&&) mutable -> FwdIter {
+                    difference_type search_res = tok.get_data();
+                    if (search_res != s_difference_type(count))
+                        std::advance(first, search_res);
+
+                    return std::move(first);
+                };
+                return partitioner::call_with_index(
+                    std::forward<ExPolicy>(policy), first, count - (diff - 1),
+                    1, std::move(f1), std::move(f2));
             }
         };
         /// \endcond
@@ -315,11 +380,11 @@ namespace hpx {namespace parallel { inline namespace v1
     ///                     It describes the manner in which the execution
     ///                     of the algorithm may be parallelized and the manner
     ///                     in which it executes the assignments.
-    /// \tparam FwdIter      The type of the source iterators used for the
+    /// \tparam FwdIter     The type of the source iterators used for the
     ///                     first range (deduced).
     ///                     This iterator type must meet the requirements of an
     ///                     input iterator.
-    /// \tparam FwdIter2     The type of the source iterators used for the
+    /// \tparam FwdIter2    The type of the source iterators used for the
     ///                     second range (deduced).
     ///                     This iterator type must meet the requirements of an
     ///                     forward iterator.
@@ -352,6 +417,14 @@ namespace hpx {namespace parallel { inline namespace v1
     ///                     that objects of types \a FwdIter1 and \a FwdIter2 can
     ///                     be dereferenced and then implicitly converted to
     ///                     \a Type1 and \a Type2 respectively
+    /// \param proj1        Specifies the function (or function object) which
+    ///                     will be invoked for each of the elements of type
+    ///                     dereferenced \a FwdIter1 as a projection operation
+    ///                     before the actual predicate \a is invoked.
+    /// \param proj2        Specifies the function (or function object) which
+    ///                     will be invoked for each of the elements of type
+    ///                     dereferenced \a FwdIter2 as a projection operation
+    ///                     before the actual predicate \a is invoked.
     ///
     /// The comparison operations in the parallel \a search_n algorithm invoked
     /// with an execution policy object of type \a sequenced_policy
@@ -375,13 +448,25 @@ namespace hpx {namespace parallel { inline namespace v1
     ///           is found, \a first is also returned.
     ///
     template <typename ExPolicy, typename FwdIter, typename FwdIter2,
-        typename Pred = detail::equal_to>
-    inline typename std::enable_if<
-        execution::is_execution_policy<ExPolicy>::value,
-        typename util::detail::algorithm_result<ExPolicy, FwdIter>::type
-    >::type
+        typename Pred = detail::equal_to,
+        typename Proj1 = util::projection_identity,
+        typename Proj2 = util::projection_identity,
+    HPX_CONCEPT_REQUIRES_(
+        execution::is_execution_policy<ExPolicy>::value &&
+        hpx::traits::is_iterator<FwdIter>::value &&
+        traits::is_projected<Proj1, FwdIter>::value &&
+        hpx::traits::is_iterator<FwdIter2>::value &&
+        traits::is_projected<Proj2, FwdIter2>::value &&
+        traits::is_indirect_callable<
+            ExPolicy, Pred,
+            traits::projected<Proj1, FwdIter>,
+            traits::projected<Proj2, FwdIter2>
+        >::value
+    )>
+    typename util::detail::algorithm_result<ExPolicy, FwdIter>::type
     search_n(ExPolicy && policy, FwdIter first, std::size_t count,
-        FwdIter2 s_first, FwdIter2 s_last, Pred && op = Pred())
+        FwdIter2 s_first, FwdIter2 s_last, Pred && op = Pred(),
+        Proj1 && proj1 = Proj1(), Proj2 && proj2 = Proj2())
     {
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter>::value),
@@ -394,7 +479,8 @@ namespace hpx {namespace parallel { inline namespace v1
 
         return detail::search_n<FwdIter>().call(
             std::forward<ExPolicy>(policy), is_seq(),
-            first, count, s_first, s_last, std::forward<Pred>(op));
+            first, count, s_first, s_last, std::forward<Pred>(op),
+            std::forward<Proj1>(proj1), std::forward<Proj2>(proj2));
     }
 }}}
 

@@ -1,20 +1,28 @@
-# Copyright (c) 2007-2016 Hartmut Kaiser
+# Copyright (c) 2007-2017 Hartmut Kaiser
 #
 # Distributed under the Boost Software License, Version 1.0. (See accompanying
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 set(tests
+    bulk_new_3054
     client_base_registration
     create_n_components_2323
-    create_remote_component_2334
     moveonly_constructor_arguments_1405
     new_2848
     partitioned_vector_2201
     returned_client_2150
    )
 
-set(create_remote_component_2334_PARAMETERS LOCALITIES 2)
+set(bulk_new_3054_PARAMETERS LOCALITIES 2)
 set(new_2848_PARAMETERS LOCALITIES 2)
+
+if(HPX_WITH_NETWORKING)
+    set(tests ${tests}
+        create_remote_component_2334
+       )
+
+  set(create_remote_component_2334_PARAMETERS LOCALITIES 2)
+endif()
 
 foreach(test ${tests})
   set(sources
@@ -41,6 +49,6 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.regressions.components_dir.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()
 

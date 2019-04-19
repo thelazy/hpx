@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //  Copyright (c) 2016 Thomas Heller
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -20,6 +20,7 @@
 #include <hpx/util/assert.hpp>
 #include <hpx/util/decay.hpp>
 #include <hpx/util/detail/pack.hpp>
+#include <hpx/util/invoke.hpp>
 #include <hpx/util/tuple.hpp>
 #include <hpx/util/unused.hpp>
 
@@ -66,18 +67,19 @@ namespace hpx { namespace parallel { inline namespace v2
         HPX_FORCEINLINE void invoke_iteration(hpx::util::tuple<Ts...>& args,
             hpx::util::detail::pack_c<std::size_t, Is...>, F && f, B part_begin)
         {
-            hpx::util::invoke_r<void>(std::forward<F>(f), part_begin,
+            hpx::util::invoke(std::forward<F>(f), part_begin,
                 hpx::util::get<Is>(args).iteration_value()...);
         }
 
         template <typename ... Ts, std::size_t ... Is>
         HPX_HOST_DEVICE
         HPX_FORCEINLINE void next_iteration(hpx::util::tuple<Ts...>& args,
-            hpx::util::detail::pack_c<std::size_t, Is...>)
+            hpx::util::detail::pack_c<std::size_t, Is...>,
+            std::size_t part_index)
         {
             int const _sequencer[] =
             {
-                0, (hpx::util::get<Is>(args).next_iteration(), 0)...
+                0, (hpx::util::get<Is>(args).next_iteration(part_index), 0)...
             };
             (void)_sequencer;
         }
@@ -128,8 +130,6 @@ namespace hpx { namespace parallel { inline namespace v2
                 {
                     detail::invoke_iteration(args_, pack, f_, part_begin);
 
-                    detail::next_iteration(args_, pack);
-
                     // NVCC seems to have a bug with std::min...
                     std::size_t chunk =
                         S(part_steps) < stride_ ? part_steps : stride_;
@@ -138,6 +138,9 @@ namespace hpx { namespace parallel { inline namespace v2
                     part_begin = parallel::v1::detail::next(
                         part_begin, part_steps, chunk);
                     part_steps -= chunk;
+                    part_index += chunk;
+
+                    detail::next_iteration(args_, pack, part_index);
                 }
             }
 
@@ -165,6 +168,7 @@ namespace hpx { namespace parallel { inline namespace v2
             sequential(ExPolicy policy, InIter first, Size size, S stride,
                 F && f, Args &&... args)
             {
+                std::size_t part_index = 0;
                 int const init_sequencer[] = {
                     0, (args.init_iteration(0), 0)...
                 };
@@ -175,17 +179,18 @@ namespace hpx { namespace parallel { inline namespace v2
                 {
                     hpx::util::invoke(f, first, args.iteration_value()...);
 
-                    int const next_sequencer[] = {
-                        0, (args.next_iteration(), 0)...
-                    };
-                    (void)next_sequencer;
-
                     // NVCC seems to have a bug with std::min...
                     std::size_t chunk = (S(count) < stride) ? count : stride;
 
                     // modifies 'chunk'
                     first = parallel::v1::detail::next(first, count, chunk);
                     count -= chunk;
+                    part_index += chunk;
+
+                    int const next_sequencer[] = {
+                        0, (args.next_iteration(part_index), 0)...
+                    };
+                    (void)next_sequencer;
                 }
 
                 // make sure live-out variables are properly set on return
@@ -206,19 +211,19 @@ namespace hpx { namespace parallel { inline namespace v2
                 if (size == 0)
                     return util::detail::algorithm_result<ExPolicy>::get();
 
-                auto && args =
-                    hpx::util::forward_as_tuple(std::forward<Ts>(ts)...);
-
                 // we need to decay copy here to properly transport everything
                 // to a GPU device
                 typedef
                     hpx::util::tuple<typename hpx::util::decay<Ts>::type...>
                     args_type;
 
-                return util::partitioner<ExPolicy>::call_with_index(
-                    policy, first, size, stride,
+                args_type args =
+                    hpx::util::forward_as_tuple(std::forward<Ts>(ts)...);
+
+                return util::partitioner<ExPolicy>::call_with_index(policy,
+                    first, size, stride,
                     part_iterations<F, S, args_type>{
-                        std::forward<F>(f), stride, std::move(args)
+                        std::forward<F>(f), stride, args
                     },
                     [=] (std::vector<hpx::future<void> > &&) mutable -> void
                     {
@@ -252,25 +257,12 @@ namespace hpx { namespace parallel { inline namespace v2
             // the for_loop should be executed sequentially if the
             // execution policy enforces sequential execution or if the
             // loop boundaries are integral types
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-            static_assert(
-                (std::is_integral<B>::value ||
-                 hpx::traits::is_input_iterator<B>::value),
-                "Requires at least input iterator or integral loop boundaries.");
-
-            typedef std::integral_constant<bool,
-                    execution::is_sequenced_execution_policy<ExPolicy>::value ||
-                    (!std::is_integral<B>::value &&
-                     !hpx::traits::is_forward_iterator<B>::value)
-                > is_seq;
-#else
             static_assert(
                 (std::is_integral<B>::value ||
                  hpx::traits::is_forward_iterator<B>::value),
                 "Requires at least forward iterator or integral loop boundaries.");
 
             typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
             std::size_t size = parallel::v1::detail::distance(first, last);
             auto && t = hpx::util::forward_as_tuple(std::forward<Args>(args)...);
@@ -301,23 +293,12 @@ namespace hpx { namespace parallel { inline namespace v2
                     hpx::traits::is_bidirectional_iterator<B>::value);
             }
 
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-            // the for_loop_n should be executed sequentially either if the
-            // execution policy enforces sequential execution or if the
-            // loop boundaries are input or output iterators
-            typedef std::integral_constant<bool,
-                    execution::is_sequenced_execution_policy<ExPolicy>::value ||
-                    (!std::is_integral<B>::value &&
-                     !hpx::traits::is_forward_iterator<B>::value)
-                > is_seq;
-#else
             static_assert(
                 (std::is_integral<B>::value ||
                  hpx::traits::is_forward_iterator<B>::value),
                 "Requires at least forward iterator or integral loop boundaries.");
 
             typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
             auto && t = hpx::util::forward_as_tuple(std::forward<Args>(args)...);
 

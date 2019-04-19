@@ -49,8 +49,6 @@
 #include <cstdlib>
 #include <stdexcept>
 
-#include <boost/type_traits/type_with_alignment.hpp>
-
 #if defined(_POSIX_MAPPED_FILES) && _POSIX_MAPPED_FILES > 0
 #include <errno.h>
 #include <sys/mman.h>
@@ -98,13 +96,17 @@ namespace posix
 
         if (real_stack == MAP_FAILED)
         {
-            if (ENOMEM == errno)
-                throw std::runtime_error("mmap() failed to allocate thread stack due "
-                    "to insufficient resources, "
+            if (ENOMEM == errno && use_guard_pages)
+            {
+                throw std::runtime_error("mmap() failed to allocate "
+                    "thread stack due to insufficient resources, "
                     "increase /proc/sys/vm/max_map_count or add "
                     "-Ihpx.stacks.use_guard_pages=0 to the command line");
+            }
             else
+            {
                 throw std::runtime_error("mmap() failed to allocate thread stack");
+            }
         }
 
 #if defined(HPX_HAVE_THREAD_GUARD_PAGE)
@@ -174,7 +176,7 @@ namespace posix
 
     struct stack_aligner
     {
-        boost::type_with_alignment<stack_alignment>::type dummy;
+        alignas(stack_alignment) char dummy[stack_alignment];
     };
 
     /**

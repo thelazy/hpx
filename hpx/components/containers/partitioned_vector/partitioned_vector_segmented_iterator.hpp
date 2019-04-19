@@ -513,7 +513,7 @@ namespace hpx
 
     public:
         segment_vector_iterator()
-          : data_(0)
+          : data_(nullptr)
         {}
 
         segment_vector_iterator(BaseIter const& it,
@@ -547,7 +547,7 @@ namespace hpx
 
     public:
         const_segment_vector_iterator()
-          : data_(0)
+          : data_(nullptr)
         {}
 
         template<typename RightBaseIter>
@@ -707,7 +707,7 @@ namespace hpx
 
         // constructors
         vector_iterator()
-          : data_(0), global_index_(size_type(-1))
+          : data_(nullptr), global_index_(size_type(-1))
         {}
 
         vector_iterator(partitioned_vector<T, Data>* data,

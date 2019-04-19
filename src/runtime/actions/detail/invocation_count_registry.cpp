@@ -6,12 +6,14 @@
 #include <hpx/config.hpp>
 #include <hpx/exception.hpp>
 #include <hpx/runtime/actions/detail/invocation_count_registry.hpp>
+#include <hpx/performance_counters/counters.hpp>
 #include <hpx/performance_counters/registry.hpp>
 #include <hpx/util/format.hpp>
+#include <hpx/util/regex_from_pattern.hpp>
 
+#include <regex>
 #include <string>
 
-#include <boost/regex.hpp>
 
 namespace hpx { namespace actions { namespace detail
 {
@@ -99,18 +101,16 @@ namespace hpx { namespace actions { namespace detail
 
         if (p.parameters_.find_first_of("*?[]") != std::string::npos)
         {
-            std::string str_rx(
-                performance_counters::detail::regex_from_pattern(
-                    p.parameters_, ec));
+            std::string str_rx(util::regex_from_pattern(p.parameters_, ec));
             if (ec) return false;
 
             bool found_one = false;
-            boost::regex rx(str_rx, boost::regex::perl);
+            std::regex rx(str_rx);
 
             map_type::const_iterator end = map_.end();
             for (map_type::const_iterator it = map_.begin(); it != end; ++it)
             {
-                if (!boost::regex_match((*it).first, rx))
+                if (!std::regex_match((*it).first, rx))
                     continue;
                 found_one = true;
 
@@ -142,8 +142,8 @@ namespace hpx { namespace actions { namespace detail
                 HPX_THROWS_IF(ec, bad_parameter,
                     "invocation_count_registry::counter_discoverer",
                     hpx::util::format(
-                        "action type %s does not match any known type, "
-                        "known action types: \n%s", p.parameters_, types));
+                        "action type {} does not match any known type, "
+                        "known action types: \n{}", p.parameters_, types));
                 return false;
             }
 
@@ -168,8 +168,8 @@ namespace hpx { namespace actions { namespace detail
             HPX_THROWS_IF(ec, bad_parameter,
                 "invocation_count_registry::counter_discoverer",
                 hpx::util::format(
-                    "action type %s does not match any known type, "
-                    "known action types: \n%s", p.parameters_, types));
+                    "action type {} does not match any known type, "
+                    "known action types: \n{}", p.parameters_, types));
             return false;
         }
 

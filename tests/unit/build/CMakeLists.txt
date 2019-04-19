@@ -1,4 +1,5 @@
 # Copyright (c) 2014 Thomas Heller
+# Copyright (c) 2018 Nikunj Gupta
 #
 # Distributed under the Boost Software License, Version 1.0. (See accompanying
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +10,7 @@ if(NOT HPX_WITH_TESTS_EXTERNAL_BUILD)
 endif()
 
 # Try building an external cmake based project ...
-macro(create_cmake_test name hpx_dir)
+function(create_cmake_test name hpx_dir)
   set(build_dir "${CMAKE_CURRENT_BINARY_DIR}/${name}")
   add_custom_target(${name}.make_build_dir
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${build_dir}" VERBATIM
@@ -34,7 +35,7 @@ macro(create_cmake_test name hpx_dir)
   add_custom_target(${name}.make_configure
     COMMAND
       "${CMAKE_COMMAND}" -E chdir "${build_dir}" "${CMAKE_COMMAND}"
-      "${PROJECT_SOURCE_DIR}/tests/unit/build/src"
+      "${PROJECT_SOURCE_DIR}/examples/hello_world_component"
       -DHPX_DIR=${hpx_dir}
       ${ADDITIONAL_CMAKE_OPTIONS}
       -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS_SAFE}
@@ -65,9 +66,9 @@ macro(create_cmake_test name hpx_dir)
 #    "build" ${name}
 #    EXECUTABLE "${build_dir}/test"
 #  )
-endmacro()
+endfunction()
 
-macro(create_pkgconfig_test name hpx_dir)
+function(create_pkgconfig_test name hpx_dir)
   set(build_dir "${CMAKE_CURRENT_BINARY_DIR}/${name}")
   add_custom_target(${name}.make_build_dir
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${build_dir}" VERBATIM
@@ -75,8 +76,8 @@ macro(create_pkgconfig_test name hpx_dir)
   add_custom_target(${name}.make_compile
     COMMAND
       "${CMAKE_COMMAND}" -E chdir "${build_dir}" make
-      -f "${PROJECT_SOURCE_DIR}/tests/unit/build/src/Makefile"
-      SRC_DIR=${PROJECT_SOURCE_DIR}/tests/unit/build/src
+      -f "${PROJECT_SOURCE_DIR}/examples/hello_world_component/Makefile"
+      SRC_DIR=${PROJECT_SOURCE_DIR}/examples/hello_world_component
       HPX_DIR=${hpx_dir}
       CXX=${CMAKE_CXX_COMPILER}
       CXX_FLAGS=${CMAKE_CXX_FLAGS_SAFE}
@@ -93,7 +94,7 @@ macro(create_pkgconfig_test name hpx_dir)
 #    "build" ${name}
 #    EXECUTABLE "${build_dir}/test"
 #  )
-endmacro()
+endfunction()
 
 create_cmake_test(
   cmake_build_dir_test
@@ -101,7 +102,7 @@ create_cmake_test(
 
 create_cmake_test(
   cmake_install_dir_test
-  "${CMAKE_INSTALL_PREFIX}/lib/cmake/${HPX_PACKAGE_NAME}"
+  "${CMAKE_INSTALL_FULL_LIBDIR}/cmake/${HPX_PACKAGE_NAME}"
 )
 
 find_package(PkgConfig)
@@ -112,7 +113,7 @@ if(PKGCONFIG_FOUND AND NOT MSVC)
 
   create_pkgconfig_test(
     pkgconfig_install_dir_test
-    "${CMAKE_INSTALL_PREFIX}/lib/pkgconfig")
+    "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig")
 endif()
 
 set(tests

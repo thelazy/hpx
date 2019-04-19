@@ -9,22 +9,24 @@
 #include <hpx/error_code.hpp>
 #include <hpx/exception.hpp>
 #include <hpx/exception_info.hpp>
-#include <hpx/state.hpp>
-#include <hpx/version.hpp>
 #include <hpx/runtime.hpp>
 #include <hpx/runtime/config_entry.hpp>
 #include <hpx/runtime/get_locality_id.hpp>
 #include <hpx/runtime/get_worker_thread_num.hpp>
 #include <hpx/runtime/naming/name.hpp>
-#include <hpx/runtime/threads/threadmanager.hpp>
 #include <hpx/runtime/threads/thread_helpers.hpp>
+#include <hpx/runtime/threads/threadmanager.hpp>
+#include <hpx/state.hpp>
 #include <hpx/util/assert.hpp>
 #include <hpx/util/backtrace.hpp>
 #include <hpx/util/command_line_handling.hpp>
 #include <hpx/util/debugging.hpp>
-#include <hpx/util/filesystem_compatibility.hpp>
 #include <hpx/util/format.hpp>
 #include <hpx/util/logging.hpp>
+#include <hpx/util/register_locks.hpp>
+#include <hpx/version.hpp>
+
+#include <boost/filesystem/path.hpp>
 
 #if defined(HPX_WINDOWS)
 #  include <process.h>
@@ -42,6 +44,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef __APPLE__
@@ -76,11 +79,22 @@ namespace hpx
       : boost::system::system_error(make_error_code(e, plain))
     {
         HPX_ASSERT((e >= success && e < last_error) || (e & system_error_flag));
-        LERR_(error) << "created exception: " << this->what();
+        if (e != success)
+        {
+            LERR_(error) << "created exception: " << this->what();
+        }
     }
 
     /// Construct a hpx::exception from a boost#system_error.
     exception::exception(boost::system::system_error const& e)
+      : boost::system::system_error(e)
+    {
+        LERR_(error) << "created exception: " << this->what();
+    }
+
+    /// Construct a hpx::exception from a boost#system#error_code (this is
+    /// new for Boost V1.69).
+    exception::exception(boost::system::error_code const& e)
       : boost::system::system_error(e)
     {
         LERR_(error) << "created exception: " << this->what();
@@ -101,7 +115,10 @@ namespace hpx
       : boost::system::system_error(make_system_error_code(e, mode), msg)
     {
         HPX_ASSERT((e >= success && e < last_error) || (e & system_error_flag));
-        LERR_(error) << "created exception: " << this->what();
+        if (e != success)
+        {
+            LERR_(error) << "created exception: " << this->what();
+        }
     }
 
     /// Construct a hpx::exception from a \a hpx::error and an error message.
@@ -119,13 +136,16 @@ namespace hpx
       : boost::system::system_error(make_system_error_code(e, mode), msg)
     {
         HPX_ASSERT((e >= success && e < last_error) || (e & system_error_flag));
-        LERR_(error) << "created exception: " << this->what();
+        if (e != success)
+        {
+            LERR_(error) << "created exception: " << this->what();
+        }
     }
 
     /// Destruct a hpx::exception
     ///
     /// \throws nothing
-    exception::~exception() throw()
+    exception::~exception() noexcept
     {
     }
 
@@ -209,10 +229,13 @@ namespace hpx { namespace detail
 
         std::sort(env.begin(), env.end());
 
-        std::string retval = hpx::util::format("%d entries:\n", env.size());
+        std::string retval = hpx::util::format("{} entries:\n", env.size());
         for (std::string const& s : env)
         {
-            retval += "  " + s + "\n";
+            if (s.find("DOCKER") == std::string::npos)
+            {
+                retval += "  " + s + "\n";
+            }
         }
         return retval;
     }
@@ -231,21 +254,22 @@ namespace hpx { namespace detail
         // create a std::exception_ptr object encapsulating the Exception to
         // be thrown and annotate it with all the local information we have
         try {
-            throw_with_info(e, hpx::exception_info().set(
-               hpx::detail::throw_stacktrace(back_trace),
-               hpx::detail::throw_locality(node),
-               hpx::detail::throw_hostname(hostname),
-               hpx::detail::throw_pid(pid),
-               hpx::detail::throw_shepherd(shepherd),
-               hpx::detail::throw_thread_id(thread_id),
-               hpx::detail::throw_thread_name(thread_name),
-               hpx::detail::throw_function(func),
-               hpx::detail::throw_file(file),
-               hpx::detail::throw_line(line),
-               hpx::detail::throw_env(env),
-               hpx::detail::throw_config(config),
-               hpx::detail::throw_state(state_name),
-               hpx::detail::throw_auxinfo(auxinfo)));
+            throw_with_info(e,
+                std::move(hpx::exception_info().set(
+                    hpx::detail::throw_stacktrace(back_trace),
+                    hpx::detail::throw_locality(node),
+                    hpx::detail::throw_hostname(hostname),
+                    hpx::detail::throw_pid(pid),
+                    hpx::detail::throw_shepherd(shepherd),
+                    hpx::detail::throw_thread_id(thread_id),
+                    hpx::detail::throw_thread_name(thread_name),
+                    hpx::detail::throw_function(func),
+                    hpx::detail::throw_file(file),
+                    hpx::detail::throw_line(line),
+                    hpx::detail::throw_env(env),
+                    hpx::detail::throw_config(config),
+                    hpx::detail::throw_state(state_name),
+                    hpx::detail::throw_auxinfo(auxinfo))));
         }
         catch (...) {
             return std::current_exception();
@@ -264,10 +288,11 @@ namespace hpx { namespace detail
         // create a std::exception_ptr object encapsulating the Exception to
         // be thrown and annotate it with all the local information we have
         try {
-            throw_with_info(e, hpx::exception_info().set(
-               hpx::detail::throw_function(func),
-               hpx::detail::throw_file(file),
-               hpx::detail::throw_line(line)));
+            throw_with_info(e,
+                std::move(
+                    hpx::exception_info().set(hpx::detail::throw_function(func),
+                        hpx::detail::throw_file(file),
+                        hpx::detail::throw_line(line))));
         }
         catch (...) {
             return std::current_exception();
@@ -451,20 +476,23 @@ namespace hpx { namespace detail
             util::attach_debugger();
         }
 
-        bool threw = false;
+        bool has_thrown = false;
 
         std::string str("assertion '" + std::string(msg) + "' failed");
         if (expr != msg)
             str += " (" + std::string(expr) + ")";
 
         try {
-            boost::filesystem::path p(hpx::util::create_path(file));
+            // ignore all acquired locks while handling assertions
+            util::ignore_all_while_checking il;
+
+            boost::filesystem::path p(file);
             hpx::detail::throw_exception(
                 hpx::exception(hpx::assertion_failure, str),
                 function, p.string(), line);
         }
         catch (...) {
-            threw = true;
+            has_thrown = true;
 
             // If the runtime pointer is available, we can safely get the prefix
             // of this locality. If it's not available, then just terminate.
@@ -481,7 +509,7 @@ namespace hpx { namespace detail
 
         // If the exception wasn't thrown, then print out the assertion message,
         // so that the program doesn't abort without any diagnostics.
-        if (!threw) {
+        if (!has_thrown) {
             std::cerr << "Runtime is not available, reporting error locally\n"
                          "{what}: " << str << std::endl;
         }
@@ -593,7 +621,7 @@ namespace hpx
             thread_info = true;
         }
 
-        std::string thread_name = runtime::get_thread_name();
+        std::string thread_name = hpx::get_thread_name();
         if (!thread_info)
             strm << thread_prefix;
         else
@@ -603,7 +631,10 @@ namespace hpx
         std::size_t const* thread_id =
             xi.get<hpx::detail::throw_thread_id>();
         if (thread_id && *thread_id)
-            hpx::util::format_to(strm, "{thread-id}: %016x\n", *thread_id);
+        {
+            strm << "{thread-id}: ";
+            hpx::util::format_to(strm, "{:016x}\n", *thread_id);
+        }
 
         std::string const* thread_description =
             xi.get<hpx::detail::throw_thread_name>();

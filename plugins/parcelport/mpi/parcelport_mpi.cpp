@@ -10,7 +10,7 @@
 #include <hpx/traits/plugin_config_data.hpp>
 
 #if defined(HPX_HAVE_PARCELPORT_MPI)
-#include <mpi.h>
+#include <hpx/plugins/parcelport/mpi/mpi.hpp>
 #endif
 
 #include <hpx/plugins/parcelport/mpi/mpi_environment.hpp>
@@ -30,6 +30,7 @@
 #include <hpx/plugins/parcelport/mpi/sender.hpp>
 #include <hpx/plugins/parcelport/mpi/receiver.hpp>
 
+#include <hpx/util/detail/yield_k.hpp>
 #include <hpx/util/runtime_configuration.hpp>
 #include <hpx/util/safe_lexical_cast.hpp>
 
@@ -116,7 +117,7 @@ namespace hpx { namespace parcelset
         public:
             parcelport(util::runtime_configuration const& ini,
                 util::function_nonser<void(std::size_t, char const*)> const& on_start,
-                util::function_nonser<void()> const& on_stop)
+                util::function_nonser<void(std::size_t, char const*)> const& on_stop)
               : base_type(ini, here(), on_start, on_stop)
               , stopped_(false)
               , receiver_(*this)
@@ -219,7 +220,9 @@ namespace hpx { namespace parcelset
                     else
                     {
                         ++k;
-                        hpx::lcos::local::spinlock::yield(k);
+                        util::detail::yield_k(k,
+                            "hpx::parcelset::policies::mpi::parcelport::"
+                                "io_service_work");
                     }
                 }
             }

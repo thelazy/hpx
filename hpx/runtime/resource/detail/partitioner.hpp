@@ -53,7 +53,9 @@ namespace hpx { namespace resource { namespace detail
 
     private:
         init_pool_data(const std::string &name,
-            scheduling_policy = scheduling_policy::unspecified);
+            scheduling_policy = scheduling_policy::unspecified,
+            hpx::threads::policies::scheduler_mode =
+                hpx::threads::policies::scheduler_mode::default_mode);
 
         init_pool_data(std::string const& name, scheduler_function create_func);
 
@@ -68,6 +70,7 @@ namespace hpx { namespace resource { namespace detail
 
         // counter for number of threads bound to this pool
         std::size_t num_threads_;
+        hpx::threads::policies::scheduler_mode mode_;
         scheduler_function create_function_;
     };
 
@@ -84,7 +87,9 @@ namespace hpx { namespace resource { namespace detail
 
         // create a thread_pool
         void create_thread_pool(std::string const& name,
-            scheduling_policy sched = scheduling_policy::unspecified);
+            scheduling_policy sched = scheduling_policy::unspecified,
+            hpx::threads::policies::scheduler_mode =
+                hpx::threads::policies::scheduler_mode::default_mode);
 
         // create a thread_pool with a callback function for creating a custom
         // scheduler
@@ -135,6 +140,9 @@ namespace hpx { namespace resource { namespace detail
         std::size_t get_num_threads(std::string const& pool_name) const;
         std::size_t get_num_threads(std::size_t pool_index) const;
 
+        hpx::threads::policies::scheduler_mode
+        get_scheduler_mode(std::size_t pool_index) const;
+
         std::string const& get_pool_name(std::size_t index) const;
         std::size_t get_pool_index(std::string const& pool_name) const;
 
@@ -158,9 +166,9 @@ namespace hpx { namespace resource { namespace detail
             return numa_domains_;
         }
 
-        bool terminate_after_parse()
+        int parse_result() const
         {
-            return cfg_.parse_terminate_;
+            return cfg_.parse_result_;
         }
 
         std::size_t assign_cores(std::size_t first_core);
@@ -233,6 +241,9 @@ namespace hpx { namespace resource { namespace detail
         // store policy flags determining the general behavior of the
         // resource_partitioner
         resource::partitioner_mode mode_;
+
+        // topology information
+        threads::topology& topo_;
     };
 }}}
 

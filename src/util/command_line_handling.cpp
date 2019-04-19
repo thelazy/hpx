@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2019 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,19 +7,20 @@
 
 #include <hpx/config/asio.hpp>
 #include <hpx/plugins/plugin_registry_base.hpp>
+#include <hpx/pp/stringize.hpp>
 #include <hpx/runtime.hpp>
 #include <hpx/runtime/parcelset/parcelhandler.hpp>
-#include <hpx/runtime/threads/policies/topology.hpp>
 #include <hpx/runtime/threads/cpu_mask.hpp>
 #include <hpx/runtime/threads/thread.hpp>
 #include <hpx/runtime/threads/threadmanager.hpp>
 #include <hpx/runtime/threads/topology.hpp>
 #include <hpx/util/asio_util.hpp>
+#include <hpx/util/assert.hpp>
 #include <hpx/util/batch_environment.hpp>
 #include <hpx/util/debugging.hpp>
-#include <hpx/util/detail/pp/stringize.hpp>
 #include <hpx/util/detail/reset_function.hpp>
 #include <hpx/util/format.hpp>
+#include <hpx/util/init_logging.hpp>
 #include <hpx/util/manage_config.hpp>
 #include <hpx/util/map_hostnames.hpp>
 #include <hpx/util/parse_command_line.hpp>
@@ -31,6 +32,7 @@
 #include <boost/assign/std/vector.hpp>
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
+#include <boost/tokenizer.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -42,6 +44,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace hpx { namespace util
@@ -68,13 +71,14 @@ namespace hpx { namespace util
         }
 
         ///////////////////////////////////////////////////////////////////////
-        inline void encode (std::string &str, char s, char const *r)
+        inline void encode(
+            std::string& str, char s, char const* r, std::size_t inc = 1ull)
         {
             std::string::size_type pos = 0;
             while ((pos = str.find_first_of(s, pos)) != std::string::npos)
             {
                 str.replace (pos, 1, r);
-                ++pos;
+                pos += inc;
             }
         }
 
@@ -82,6 +86,12 @@ namespace hpx { namespace util
         {
             encode(str, '\n', "\\n");
             return str;
+        }
+
+        inline std::string encode_and_enquote(std::string str)
+        {
+            encode(str, '\"', "\\\"", 2);
+            return detail::enquote(std::move(str));
         }
 
         ///////////////////////////////////////////////////////////////////////
@@ -191,7 +201,7 @@ namespace hpx { namespace util
             return num_localities;
         }
 
-        std::string handle_queueing(util::manage_config& cfgmap,
+        std::string handle_queuing(util::manage_config& cfgmap,
             boost::program_options::variables_map& vm, std::string default_)
         {
             // command line options is used preferred
@@ -280,6 +290,27 @@ namespace hpx { namespace util
         }
 
         ///////////////////////////////////////////////////////////////////////
+        std::size_t get_number_of_default_cores(util::batch_environment& env)
+        {
+            threads::topology& top = threads::create_topology();
+
+            std::size_t batch_threads = env.retrieve_number_of_threads();
+            std::size_t num_cores = top.get_number_of_cores();
+            if(batch_threads == std::size_t(-1))
+                return num_cores;
+
+            // assuming we assign the first N cores ...
+            std::size_t core = 0;
+            for(; core < num_cores; ++core)
+            {
+                batch_threads -= top.get_number_of_core_pus(core);
+                if(batch_threads == 0) break;
+            }
+
+            return core + 1;
+        }
+
+        ///////////////////////////////////////////////////////////////////////
         std::size_t handle_num_threads(util::manage_config& cfgmap,
             util::runtime_configuration const& rtcfg,
             boost::program_options::variables_map& vm,
@@ -291,7 +322,16 @@ namespace hpx { namespace util
                 "hpx.os_threads", rtcfg.get_entry("hpx.os_threads",
                     std::to_string(default_threads)));
 
-            if ("all" == threads_str)
+            if ("cores" == threads_str)
+            {
+                std::size_t cores = get_number_of_default_cores(env);
+                default_threads = cores;
+                if (batch_threads == std::size_t(-1))
+                    batch_threads = cores;
+                else
+                    default_threads = batch_threads;
+            }
+            else if ("all" == threads_str)
             {
                 if (batch_threads == std::size_t(-1))
                     batch_threads = thread::hardware_concurrency();
@@ -316,11 +356,19 @@ namespace hpx { namespace util
                 threads_str = vm["hpx:threads"].as<std::string>();
                 if ("all" == threads_str)
                 {
+                    default_threads = thread::hardware_concurrency();
+                    batch_threads = env.retrieve_number_of_threads();
                     if (batch_threads == std::size_t(-1))
                     {
                         batch_threads = thread::hardware_concurrency();
                     }
                     threads = batch_threads; //-V101
+                }
+                else if ("cores" == threads_str)
+                {
+                    std::size_t cores = get_number_of_default_cores(env);
+                    default_threads = cores;
+                    threads         = cores;
                 }
                 else
                 {
@@ -345,6 +393,30 @@ namespace hpx { namespace util
 #endif
             }
 
+            // make sure minimal requested number of threads is observed
+            std::size_t min_os_threads = cfgmap.get_value<std::size_t>(
+                "hpx.force_min_os_threads", threads);
+
+            if (min_os_threads == 0)
+            {
+                throw hpx::detail::command_line_error(
+                    "Number of hpx.force_min_os_threads must be greater than "
+                    "0");
+            }
+
+#if defined(HPX_HAVE_MAX_CPU_COUNT)
+            if (min_os_threads > HPX_HAVE_MAX_CPU_COUNT)
+            {
+                throw hpx::detail::command_line_error("Requested more than "
+                    HPX_PP_STRINGIZE(HPX_HAVE_MAX_CPU_COUNT)
+                    " hpx.force_min_os_threads "
+                    "to use for this application, use the option "
+                    "-DHPX_WITH_MAX_CPU_COUNT=<N> when configuring HPX.");
+            }
+#endif
+
+            threads = (std::max)(threads, min_os_threads);
+
             if (!initial && env.found_batch_environment() &&
                 using_nodelist && (threads > batch_threads))
             {
@@ -352,27 +424,6 @@ namespace hpx { namespace util
                     threads, batch_threads);
             }
             return threads;
-        }
-
-        ///////////////////////////////////////////////////////////////////////
-        std::size_t get_number_of_default_cores(util::batch_environment& env)
-        {
-            threads::topology& top = threads::create_topology();
-
-            std::size_t batch_threads = env.retrieve_number_of_threads();
-            std::size_t num_cores = top.get_number_of_cores();
-            if(batch_threads == std::size_t(-1))
-                return num_cores;
-
-            // assuming we assign the first N cores ...
-            std::size_t core = 0;
-            for(; core < num_cores; ++core)
-            {
-                batch_threads -= top.get_number_of_core_pus(core);
-                if(batch_threads == 0) break;
-            }
-
-            return core + 1;
         }
 
         std::size_t handle_num_cores(util::manage_config& cfgmap,
@@ -491,7 +542,7 @@ namespace hpx { namespace util
             // Check for parsing failures
             if (!iftransform) {
                 throw hpx::detail::command_line_error(hpx::util::format(
-                    "Could not parse --hpx:iftransform argument '%1%'",
+                    "Could not parse --hpx:iftransform argument '{1}'",
                     vm["hpx:iftransform"].as<std::string>()));
             }
 
@@ -534,7 +585,7 @@ namespace hpx { namespace util
 
                 // raise hard error if node file could not be opened
                 throw hpx::detail::command_line_error(hpx::util::format(
-                    "Could not open nodefile: '%s'", node_file));
+                    "Could not open nodefile: '{}'", node_file));
             }
         }
         else if (vm.count("hpx:nodes")) {
@@ -565,13 +616,14 @@ namespace hpx { namespace util
             cfgmap, rtcfg_, vm, env, using_nodelist, initial);
         num_cores_ = detail::handle_num_cores(cfgmap, vm, num_threads_, env);
 
-        bool expect_connections = false;
         bool run_agas_server = false;
         std::string hpx_host;
-        std::uint16_t initial_hpx_port = 0;
         std::uint16_t hpx_port = 0;
 
 #if defined(HPX_HAVE_NETWORKING)
+        bool expect_connections = false;
+        std::uint16_t initial_hpx_port = 0;
+
         // handling number of localities, those might have already been initialized
         // from MPI environment
         num_localities_ = detail::handle_num_localities(cfgmap, vm, env,
@@ -590,7 +642,7 @@ namespace hpx { namespace util
         //  - num_localities > 1
         expect_connections =
             cfgmap.get_value<int>("hpx.expect_connecting_localities",
-                num_localities_ > 1 ? 0 : 1) ? true : false;
+                num_localities_ > 1 ? 1 : 0) != 0;
 
         if (vm.count("hpx:expect-connecting-localities"))
             expect_connections = true;
@@ -738,10 +790,12 @@ namespace hpx { namespace util
         {
             hpx_host = hpx::util::resolve_public_ip_address();
         }
+
+        ini_config += "hpx.node!=" + std::to_string(node);
 #endif
 
         // handle setting related to schedulers
-        queuing_ = detail::handle_queueing(cfgmap, vm, "local-priority-fifo");
+        queuing_ = detail::handle_queuing(cfgmap, vm, "local-priority-fifo");
         ini_config += "hpx.scheduler=" + queuing_;
 
         affinity_domain_ = detail::handle_affinity(cfgmap, vm, "pu");
@@ -839,62 +893,7 @@ namespace hpx { namespace util
         ini_config += "hpx.agas.service_mode=bootstrap";
 #endif
 
-#if defined(HPX_HAVE_LOGGING)
-        if (vm.count("hpx:debug-hpx-log")) {
-            ini_config += "hpx.logging.console.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-hpx-log"].as<std::string>());
-            ini_config += "hpx.logging.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-hpx-log"].as<std::string>());
-            ini_config += "hpx.logging.console.level=5";
-            ini_config += "hpx.logging.level=5";
-        }
-
-        if (vm.count("hpx:debug-agas-log")) {
-            ini_config += "hpx.logging.console.agas.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-agas-log"].as<std::string>());
-            ini_config += "hpx.logging.agas.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-agas-log"].as<std::string>());
-            ini_config += "hpx.logging.console.agas.level=5";
-            ini_config += "hpx.logging.agas.level=5";
-        }
-
-        if (vm.count("hpx:debug-parcel-log")) {
-            ini_config += "hpx.logging.console.parcel.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-parcel-log"].as<std::string>());
-            ini_config += "hpx.logging.parcel.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-parcel-log"].as<std::string>());
-            ini_config += "hpx.logging.console.parcel.level=5";
-            ini_config += "hpx.logging.parcel.level=5";
-        }
-
-        if (vm.count("hpx:debug-timing-log")) {
-            ini_config += "hpx.logging.console.timing.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-timing-log"].as<std::string>());
-            ini_config += "hpx.logging.timing.destination=" +
-                detail::convert_to_log_file(
-                    vm["hpx:debug-timing-log"].as<std::string>());
-            ini_config += "hpx.logging.console.timing.level=1";
-            ini_config += "hpx.logging.timing.level=1";
-        }
-#else
-        if (vm.count("hpx:debug-hpx-log") ||
-            vm.count("hpx:debug-agas-log") ||
-            vm.count("hpx:debug-parcel-log") ||
-            vm.count("hpx:debug-timing-log"))
-        {
-            throw hpx::detail::command_line_error(
-                "Command line option error: can't enable logging while it "
-                "was disabled at configuration time. Please re-configure "
-                "HPX using the option -DHPX_WITH_LOGGING=On.");
-        }
-#endif
+        enable_logging_settings(vm, ini_config);
 
         // Set number of cores and OS threads in configuration.
         ini_config += "hpx.os_threads=" +
@@ -938,7 +937,7 @@ namespace hpx { namespace util
 
                 throw hpx::detail::command_line_error(hpx::util::format(
                     "Invalid argument for option --hpx:print-counter-at: "
-                    "'%1%', allowed values: 'startup', 'shutdown' (default), "
+                    "'{1}', allowed values: 'startup', 'shutdown' (default), "
                     "'noshutdown'", s));
             }
         }
@@ -965,6 +964,83 @@ namespace hpx { namespace util
     }
 
     ///////////////////////////////////////////////////////////////////////////
+    void command_line_handling::enable_logging_settings(
+        boost::program_options::variables_map& vm,
+        std::vector<std::string>& ini_config)
+    {
+#if defined(HPX_HAVE_LOGGING)
+        using namespace boost::assign;
+
+        if (vm.count("hpx:debug-hpx-log")) {
+            ini_config += "hpx.logging.console.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-hpx-log"].as<std::string>());
+            ini_config += "hpx.logging.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-hpx-log"].as<std::string>());
+            ini_config += "hpx.logging.console.level=5";
+            ini_config += "hpx.logging.level=5";
+        }
+
+        if (vm.count("hpx:debug-agas-log")) {
+            ini_config += "hpx.logging.console.agas.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-agas-log"].as<std::string>());
+            ini_config += "hpx.logging.agas.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-agas-log"].as<std::string>());
+            ini_config += "hpx.logging.console.agas.level=5";
+            ini_config += "hpx.logging.agas.level=5";
+        }
+
+        if (vm.count("hpx:debug-parcel-log")) {
+            ini_config += "hpx.logging.console.parcel.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-parcel-log"].as<std::string>());
+            ini_config += "hpx.logging.parcel.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-parcel-log"].as<std::string>());
+            ini_config += "hpx.logging.console.parcel.level=5";
+            ini_config += "hpx.logging.parcel.level=5";
+        }
+
+        if (vm.count("hpx:debug-timing-log")) {
+            ini_config += "hpx.logging.console.timing.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-timing-log"].as<std::string>());
+            ini_config += "hpx.logging.timing.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-timing-log"].as<std::string>());
+            ini_config += "hpx.logging.console.timing.level=1";
+            ini_config += "hpx.logging.timing.level=1";
+        }
+
+        if (vm.count("hpx:debug-app-log")) {
+            ini_config += "hpx.logging.console.application.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-app-log"].as<std::string>());
+            ini_config += "hpx.logging.application.destination=" +
+                detail::convert_to_log_file(
+                    vm["hpx:debug-app-log"].as<std::string>());
+            ini_config += "hpx.logging.console.application.level=5";
+            ini_config += "hpx.logging.application.level=5";
+        }
+#else
+        if (vm.count("hpx:debug-hpx-log") ||
+            vm.count("hpx:debug-agas-log") ||
+            vm.count("hpx:debug-parcel-log") ||
+            vm.count("hpx:debug-timing-log") ||
+            vm.count("hpx:debug-app-log"))
+        {
+            throw hpx::detail::command_line_error(
+                "Command line option error: can't enable logging while it "
+                "was disabled at configuration time. Please re-configure "
+                "HPX using the option -DHPX_WITH_LOGGING=On.");
+        }
+#endif
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
     void command_line_handling::store_command_line(int argc, char** argv)
     {
         using namespace boost::assign;
@@ -975,7 +1051,7 @@ namespace hpx { namespace util
         {
             // quote only if it contains whitespace
             std::string arg(argv[i]); //-V108
-            cmd_line += detail::enquote(arg);
+            cmd_line += detail::encode_and_enquote(arg);
 
             if ((i + 1) != argc)
                 cmd_line += " ";
@@ -999,15 +1075,17 @@ namespace hpx { namespace util
 
             iterator_type  end = unregistered_options.end();
             for (iterator_type  it = unregistered_options.begin(); it != end; ++it)
-                unregistered_options_cmd_line += " " + detail::enquote(*it);
+                unregistered_options_cmd_line +=
+                    " " + detail::encode_and_enquote(*it);
 
             ini_config_ += "hpx.unknown_cmd_line!=" +
-                detail::enquote(cmd_name) + unregistered_options_cmd_line;
+                detail::encode_and_enquote(cmd_name) +
+                unregistered_options_cmd_line;
         }
 
         ini_config_ += "hpx.program_name!=" + cmd_name;
         ini_config_ += "hpx.reconstructed_cmd_line!=" +
-            detail::enquote(cmd_name) + " " +
+            detail::encode_and_enquote(cmd_name) + " " +
             util::reconstruct_command_line(vm_) + " " +
             unregistered_options_cmd_line;
     }
@@ -1036,7 +1114,7 @@ namespace hpx { namespace util
             }
             else {
                 throw hpx::detail::command_line_error(hpx::util::format(
-                    "Invalid argument for option --hpx:help: '%1%', allowed values: "
+                    "Invalid argument for option --hpx:help: '{1}', allowed values: "
                     "'minimal' (default) and 'full'", help_option));
             }
         }
@@ -1067,7 +1145,6 @@ namespace hpx { namespace util
 #endif
     }
 
-#if defined(HPX_HAVE_HWLOC)
     ///////////////////////////////////////////////////////////////////////////
     void handle_print_bind(boost::program_options::variables_map const& vm_,
         std::size_t num_threads)
@@ -1118,10 +1195,10 @@ namespace hpx { namespace util
                     HPX_THROW_EXCEPTION(invalid_status,
                         "handle_print_bind",
                         hpx::util::format(
-                            "unexpected mismatch between locality %1%: "
+                            "unexpected mismatch between locality {1}: "
                             "binding "
-                            "reported from HWLOC(%2%) and HPX(%3%) on "
-                            "thread %4%",
+                            "reported from HWLOC({2}) and HPX({3}) on "
+                            "thread {4}",
                             hpx::get_locality_id(), boundcpu_str,
                             pu_mask_str, i));
                 }
@@ -1130,7 +1207,6 @@ namespace hpx { namespace util
             std::cout << strm.str();
         }
     }
-#endif
 
     void handle_list_parcelports()
     {
@@ -1147,6 +1223,53 @@ namespace hpx { namespace util
     }
 
     ///////////////////////////////////////////////////////////////////////////
+    // separate command line arguments from configuration settings
+    std::vector<std::string> command_line_handling::preprocess_config_settings(
+        int argc, char** argv)
+    {
+        std::vector<std::string> options;
+        options.reserve(argc + ini_config_.size());
+
+        // extract all command line arguments from configuration settings and
+        // remove them from this list
+        auto it = std::stable_partition(
+            ini_config_.begin(), ini_config_.end(),
+            [](std::string const& e)
+            {
+                return e.find("--hpx:") != 0;
+            });
+
+        std::move(it, ini_config_.end(), std::back_inserter(options));
+        ini_config_.erase(it, ini_config_.end());
+
+        // now append all original command line options
+        for (int i = 1; i != argc; ++i)
+        {
+            options.emplace_back(argv[i]);
+        }
+
+        return options;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    std::vector<std::string> prepend_options(
+        std::vector<std::string>&& args, std::string&& options)
+    {
+        if (options.empty())
+        {
+            return std::move(args);
+        }
+
+        using tokenizer = boost::tokenizer<boost::escaped_list_separator<char>>;
+        boost::escaped_list_separator<char> sep('\\', ' ', '\"');
+        tokenizer tok(options, sep);
+
+        std::vector<std::string> result(tok.begin(), tok.end());
+        std::move(args.begin(), args.end(), std::back_inserter(result));
+        return result;
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
     int command_line_handling::call(
         boost::program_options::options_description const& desc_cmdline,
         int argc, char** argv)
@@ -1154,12 +1277,12 @@ namespace hpx { namespace util
         // set the flag signaling that command line parsing has been done
         cmd_line_parsed_ = true;
 
+        // separate command line arguments from configuration settings
+        std::vector<std::string> args = preprocess_config_settings(argc, argv);
+
         util::manage_config cfgmap(ini_config_);
 
-        std::vector<std::shared_ptr<plugins::plugin_registry_base> >
-            plugin_registries = rtcfg_.load_modules();
-
-        // insert the pre-configured ini settings after loading modules
+        // insert the pre-configured ini settings before loading modules
         for (std::string const& e : ini_config_)
             rtcfg_.parse("<user supplied config>", e, true, false);
 
@@ -1170,6 +1293,14 @@ namespace hpx { namespace util
             error_mode |= util::rethrow_on_error;
         }
 
+        // The cfg registry may hold command line options to prepend to the
+        // real command line.
+        std::string prepend_command_line =
+            rtcfg_.get_entry("hpx.commandline.prepend_options");
+
+        args =
+            prepend_options(std::move(args), std::move(prepend_command_line));
+
         // Initial analysis of the command line options. This is
         // preliminary as it will not take into account any aliases as
         // defined in any of the runtime configuration files.
@@ -1179,15 +1310,15 @@ namespace hpx { namespace util
             // creating a separate instance just for the preliminary
             // command line handling.
             boost::program_options::variables_map prevm;
-            if (!util::parse_commandline(rtcfg_, desc_cmdline, argc,
-                    argv, prevm, std::size_t(-1), error_mode,
+            if (!util::parse_commandline(rtcfg_, desc_cmdline, argv[0], args,
+                    prevm, std::size_t(-1), error_mode,
                     rtcfg_.mode_))
             {
                 return -1;
             }
 
             // handle all --hpx:foo options, determine node
-            std::vector<std::string> ini_config;    // will be discarded
+            std::vector<std::string> ini_config;    // discard
             if (!handle_arguments(cfgmap, prevm, ini_config, node_, true))
                 return -2;
 
@@ -1209,21 +1340,44 @@ namespace hpx { namespace util
             std::copy(ini_config_.begin(), ini_config_.end(),
                 std::back_inserter(cfg));
 
+            // enable logging if invoked requested from command line
+            std::vector<std::string> ini_config_logging;
+            enable_logging_settings(prevm, ini_config_logging);
+
+            std::copy(ini_config_logging.begin(), ini_config_logging.end(),
+                std::back_inserter(cfg));
+
             rtcfg_.reconfigure(cfg);
         }
+
+        // initialize logging
+        util::detail::init_logging(
+            rtcfg_, rtcfg_.mode_ == runtime_mode_console);
+
+        // load plugin modules (after first pass of command line handling,
+        // so that settings given on command line could propagate to modules)
+        std::vector<std::shared_ptr<plugins::plugin_registry_base> >
+            plugin_registries = rtcfg_.load_modules();
 
         // Re-run program option analysis, ini settings (such as aliases)
         // will be considered now.
 
-        parcelset::parcelhandler::init(&argc, &argv, *this);
-        for (std::shared_ptr<plugins::plugin_registry_base>& reg : plugin_registries)
-        {
-            reg->init(&argc, &argv, *this);
-        }
-
         // minimally assume one locality and this is the console
         if (node_ == std::size_t(-1))
             node_ = 0;
+
+#if defined(HPX_HAVE_NETWORKING)
+        if (num_localities_ != 1 || node_ != 0 || rtcfg_.enable_networking())
+        {
+            parcelset::parcelhandler::init(&argc, &argv, *this);
+        }
+#endif
+
+        for (std::shared_ptr<plugins::plugin_registry_base>& reg :
+            plugin_registries)
+        {
+            reg->init(&argc, &argv, *this);
+        }
 
         // Now re-parse the command line using the node number (if given).
         // This will additionally detect any --hpx:N:foo options.
@@ -1231,7 +1385,7 @@ namespace hpx { namespace util
         std::vector<std::string> unregistered_options;
 
         if (!util::parse_commandline(rtcfg_, desc_cmdline,
-                argc, argv, vm_, node_, error_mode, rtcfg_.mode_,
+                argv[0], args, vm_, node_, error_mode, rtcfg_.mode_,
                 &help, &unregistered_options))
         {
             return -1;

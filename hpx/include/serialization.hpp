@@ -11,6 +11,7 @@
 
 #include <hpx/runtime/serialization/array.hpp>
 #include <hpx/runtime/serialization/bitset.hpp>
+#include <hpx/runtime/serialization/brace_initializable.hpp>
 #include <hpx/runtime/serialization/complex.hpp>
 #include <hpx/runtime/serialization/datapar.hpp>
 #include <hpx/runtime/serialization/deque.hpp>
@@ -19,6 +20,7 @@
 #include <hpx/runtime/serialization/list.hpp>
 #include <hpx/runtime/serialization/map.hpp>
 #include <hpx/runtime/serialization/multi_array.hpp>
+#include <hpx/runtime/serialization/optional.hpp>
 #include <hpx/runtime/serialization/partitioned_vector.hpp>
 #include <hpx/runtime/serialization/serialize_buffer.hpp>
 #include <hpx/runtime/serialization/set.hpp>

@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2013 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //  Copyright (c)      2011 Bryce Lelbach
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -10,19 +10,20 @@
 #include <hpx/config.hpp>
 #include <hpx/compat/mutex.hpp>
 #include <hpx/lcos/local/spinlock.hpp>
+#include <hpx/performance_counters/counters.hpp>
 #include <hpx/runtime/applier_fwd.hpp>
 #include <hpx/runtime/components/component_type.hpp>
 #include <hpx/runtime/parcelset/locality.hpp>
 #include <hpx/runtime/parcelset_fwd.hpp>
 #include <hpx/runtime/runtime_mode.hpp>
+#include <hpx/runtime/shutdown_function.hpp>
+#include <hpx/runtime/startup_function.hpp>
+#include <hpx/runtime/thread_hooks.hpp>
 #include <hpx/runtime/threads/policies/callback_notifier.hpp>
 #include <hpx/runtime/threads/topology.hpp>
 #include <hpx/runtime_fwd.hpp>
 #include <hpx/state.hpp>
 #include <hpx/util/runtime_configuration.hpp>
-#include <hpx/util/thread_specific_ptr.hpp>
-
-#include <boost/smart_ptr/scoped_ptr.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -39,6 +40,9 @@
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx
 {
+    // \brief Returns if HPX continues past connection signals
+    // caused by crashed nodes
+    HPX_EXPORT bool tolerate_node_faults();
     namespace util
     {
         class thread_mapper;
@@ -52,7 +56,7 @@ namespace hpx
         namespace server
         {
             class runtime_support;
-            class memory;
+            class HPX_EXPORT memory;
         }
     }
 
@@ -116,13 +120,6 @@ namespace hpx
             return state_.load() == state_stopped;
         }
 
-        // the TSS holds a pointer to the runtime associated with a given
-        // OS thread
-        struct tls_tag {};
-        static util::thread_specific_ptr<runtime*, tls_tag> runtime_;
-        static util::thread_specific_ptr<std::string, tls_tag> thread_name_;
-        static util::thread_specific_ptr<std::uint64_t, tls_tag> uptime_;
-
         /// \brief access configuration information
         util::runtime_configuration& get_config()
         {
@@ -137,9 +134,6 @@ namespace hpx
         {
             return static_cast<std::size_t>(instance_number_);
         }
-
-        /// \brief Return the name of the calling thread.
-        static std::string get_thread_name();
 
         /// \brief Return the system uptime measure on the thread executing this call
         static std::uint64_t get_system_uptime();
@@ -185,6 +179,9 @@ namespace hpx
 
         virtual void stop(bool blocking = true) = 0;
 
+        virtual int suspend() = 0;
+        virtual int resume() = 0;
+
         virtual parcelset::parcelhandler& get_parcel_handler() = 0;
         virtual parcelset::parcelhandler const& get_parcel_handler() const = 0;
 
@@ -201,10 +198,10 @@ namespace hpx
 
         virtual std::uint64_t get_memory_lva() const = 0;
 
-        virtual void report_error(std::size_t num_thread,
+        virtual bool report_error(std::size_t num_thread,
             std::exception_ptr const& e) = 0;
 
-        virtual void report_error(std::exception_ptr const& e) = 0;
+        virtual bool report_error(std::exception_ptr const& e) = 0;
 
         virtual naming::gid_type get_next_id(std::size_t count = 1) = 0;
 
@@ -217,12 +214,6 @@ namespace hpx
         virtual void add_pre_shutdown_function(shutdown_function_type f) = 0;
 
         virtual void add_shutdown_function(shutdown_function_type f) = 0;
-
-        /// Keep the factory object alive which is responsible for the given
-        /// component type. This a purely internal function allowing to work
-        /// around certain library specific problems related to dynamic
-        /// loading of external libraries.
-        virtual bool keep_factory_alive(components::component_type type) = 0;
 
         /// Access one of the internal thread pools (io_service instances)
         /// HPX is using to perform specific tasks. The three possible values
@@ -292,6 +283,7 @@ namespace hpx
         void start_active_counters(error_code& ec = throws);
         void stop_active_counters(error_code& ec = throws);
         void reset_active_counters(error_code& ec = throws);
+        void reinit_active_counters(bool reset = true, error_code& ec = throws);
         void evaluate_active_counters(bool reset = false,
             char const* description = nullptr, error_code& ec = throws);
 
@@ -307,6 +299,17 @@ namespace hpx
         serialization::binary_filter* create_binary_filter(
             char const* binary_filter_type, bool compress,
             serialization::binary_filter* next_filter, error_code& ec = throws);
+
+        notification_policy_type::on_startstop_type on_start_func() const;
+        notification_policy_type::on_startstop_type on_stop_func() const;
+        notification_policy_type::on_error_type on_error_func() const;
+
+        notification_policy_type::on_startstop_type on_start_func(
+            notification_policy_type::on_startstop_type&&);
+        notification_policy_type::on_startstop_type on_stop_func(
+            notification_policy_type::on_startstop_type&&);
+        notification_policy_type::on_error_type on_error_func(
+            notification_policy_type::on_error_type&&);
 
     protected:
         void init_tss();
@@ -330,7 +333,7 @@ namespace hpx
 
         // certain components (such as PAPI) require all threads to be
         // registered with the library
-        boost::scoped_ptr<util::thread_mapper> thread_support_;
+        std::unique_ptr<util::thread_mapper> thread_support_;
 
         // topology and affinity data
         threads::topology& topology_;
@@ -341,16 +344,14 @@ namespace hpx
 
         std::atomic<state> state_;
 
-        boost::scoped_ptr<components::server::memory> memory_;
-        boost::scoped_ptr<components::server::runtime_support> runtime_support_;
-    };
+        std::unique_ptr<components::server::memory> memory_;
+        std::unique_ptr<components::server::runtime_support> runtime_support_;
 
-    ///////////////////////////////////////////////////////////////////////////
-    /// Keep the factory object alive which is responsible for the given
-    /// component type. This a purely internal function allowing to work
-    /// around certain library specific problems related to dynamic
-    /// loading of external libraries.
-    HPX_EXPORT bool keep_factory_alive(components::component_type type);
+        // support tieing in external functions to be called for thread events
+        notification_policy_type::on_startstop_type on_start_func_;
+        notification_policy_type::on_startstop_type on_stop_func_;
+        notification_policy_type::on_error_type on_error_func_;
+    };
 }   // namespace hpx
 
 #include <hpx/config/warnings_suffix.hpp>

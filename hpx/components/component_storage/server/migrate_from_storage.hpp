@@ -12,8 +12,9 @@
 #include <hpx/runtime/naming/address.hpp>
 #include <hpx/runtime/naming/id_type.hpp>
 #include <hpx/throw_exception.hpp>
+#include <hpx/traits/component_pin_support.hpp>
 #include <hpx/traits/component_supports_migration.hpp>
-#include <hpx/util/bind.hpp>
+#include <hpx/util/bind_back.hpp>
 
 #include <hpx/components/component_storage/export_definitions.hpp>
 #include <hpx/components/component_storage/server/component_storage.hpp>
@@ -70,9 +71,12 @@ namespace hpx { namespace components { namespace server
             using hpx::components::runtime_support;
             return runtime_support::migrate_component_async<Component>(
                         target_locality, ptr, to_resurrect)
-                .then(util::bind(
-                    &detail::migrate_component_cleanup<Component>,
-                    util::placeholders::_1, ptr, to_resurrect));
+                .then(launch::sync,
+                    [ptr, to_resurrect](future<id_type> && f)
+                    {
+                        ptr->mark_as_migrated();
+                        return f.get();
+                    });
         }
 
         template <typename Component>
@@ -103,7 +107,7 @@ namespace hpx { namespace components { namespace server
             }
 
             // make sure the migration code works properly
-            ptr->pin();
+            traits::component_pin_support<Component>::pin(ptr.get());
 
             // if target locality is not specified, use the address of the last
             // locality where the object was living before
@@ -146,28 +150,19 @@ namespace hpx { namespace components { namespace server
             return make_ready_future(naming::invalid_id);
         }
 
-        return agas::begin_migration(to_resurrect)
-            .then(
-                [to_resurrect, target_locality](
-                    future<std::pair<naming::id_type, naming::address> > && f)
-                ->  future<naming::id_type>
-                {
-                    // rethrow errors
-                    std::pair<naming::id_type, naming::address> r = f.get();
+        auto r = agas::begin_migration(to_resurrect).get();
 
-                    // retrieve the data from the given storage
-                    typedef typename server::component_storage::migrate_from_here_action
-                        action_type;
-                    return async<action_type>(r.first, to_resurrect.get_gid())
-                        .then(util::bind(
-                            &detail::migrate_from_storage_here<Component>,
-                            util::placeholders::_1, to_resurrect,
-                            r.second, target_locality));
-                })
+        // retrieve the data from the given storage
+        typedef typename server::component_storage::migrate_from_here_action
+            action_type;
+        return async<action_type>(r.first, to_resurrect.get_gid())
+            .then(util::bind_back(
+                &detail::migrate_from_storage_here<Component>,
+                to_resurrect, r.second, target_locality))
             .then(
                 [to_resurrect](future<naming::id_type> && f) -> naming::id_type
                 {
-                    agas::end_migration(to_resurrect).get();
+                    agas::end_migration(to_resurrect);
                     return f.get();
                 });
     }

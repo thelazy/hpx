@@ -10,7 +10,6 @@
 #include <hpx/error_code.hpp>
 #include <hpx/lcos/local/detail/condition_variable.hpp>
 #include <hpx/lcos/local/spinlock.hpp>
-#include <hpx/runtime/get_worker_thread_num.hpp>
 #include <hpx/runtime/launch_policy.hpp>
 #include <hpx/runtime/threads/coroutines/detail/get_stack_pointer.hpp>
 #include <hpx/runtime/threads/thread_executor.hpp>
@@ -24,22 +23,24 @@
 #include <hpx/util/atomic_count.hpp>
 #include <hpx/util/bind.hpp>
 #include <hpx/util/decay.hpp>
-#include <hpx/util/deferred_call.hpp>
 #include <hpx/util/steady_clock.hpp>
 #include <hpx/util/unique_function.hpp>
 #include <hpx/util/unused.hpp>
 
+#include <boost/container/small_vector.hpp>
 #include <boost/intrusive_ptr.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <exception>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <type_traits>
 #include <utility>
+
+#include <hpx/config/warnings_prefix.hpp>
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx { namespace lcos
@@ -65,15 +66,16 @@ namespace detail
     void intrusive_ptr_release(future_data_refcnt_base* p);
 
     ///////////////////////////////////////////////////////////////////////
-    struct future_data_refcnt_base
+    struct HPX_EXPORT future_data_refcnt_base
     {
-    private:
-        typedef util::unique_function_nonser<void()> completed_callback_type;
-
     public:
+        typedef util::unique_function_nonser<void()> completed_callback_type;
+        typedef boost::container::small_vector<completed_callback_type, 3>
+            completed_callback_vector_type;
+
         typedef void has_future_data_refcnt_base;
 
-        virtual ~future_data_refcnt_base() {}
+        virtual ~future_data_refcnt_base();
 
         virtual void set_on_completed(completed_callback_type) = 0;
 
@@ -180,100 +182,11 @@ namespace detail
     };
 
     ///////////////////////////////////////////////////////////////////////////
-    struct handle_continuation_recursion_count
-    {
-        handle_continuation_recursion_count()
-          : count_(threads::get_continuation_recursion_count())
-        {
-            ++count_;
-        }
-        ~handle_continuation_recursion_count()
-        {
-            --count_;
-        }
-
-        std::size_t& count_;
-    };
-
-    ///////////////////////////////////////////////////////////////////////////
-    template <typename F1, typename F2>
-    struct compose_cb_impl
-    {
-        template <typename A1, typename A2>
-        compose_cb_impl(A1 && f1, A2 && f2)
-          : f1_(std::forward<A1>(f1))
-          , f2_(std::forward<A2>(f2))
-        {}
-
-        compose_cb_impl(compose_cb_impl&& other)
-          : f1_(std::move(other.f1_))
-          , f2_(std::move(other.f2_))
-        {}
-
-        void operator()()
-        {
-            bool recurse_asynchronously = hpx::threads::get_self_ptr() == nullptr;
-#if defined(HPX_HAVE_THREADS_GET_STACK_POINTER)
-            recurse_asynchronously =
-                !this_thread::has_sufficient_stack_space();
-#else
-            handle_continuation_recursion_count cnt;
-            recurse_asynchronously = recurse_asynchronously ||
-                cnt.count_ > HPX_CONTINUATION_MAX_RECURSION_DEPTH;
-#endif
-            if (recurse_asynchronously)
-            {
-                error_code ec;
-                threads::thread_id_type id = threads::register_thread_nullary(
-                    compose_cb_impl(std::move(f1_), std::move(f2_)),
-                    "compose_cb",
-                    threads::pending, true, threads::thread_priority_boost,
-                    std::size_t(-1), threads::thread_stacksize_current, ec);
-                return;
-            }
-
-            {
-                hpx::util::annotate_function annotate(f1_);
-                (void)annotate;
-                f1_();
-            }
-            {
-                hpx::util::annotate_function annotate(f2_);
-                (void)annotate;
-                f2_();
-            }
-        }
-
-        F1 f1_;
-        F2 f2_;
-    };
-
-    template <typename F1, typename F2>
-    static HPX_FORCEINLINE util::unique_function_nonser<void()>
-    compose_cb(F1 && f1, F2 && f2)
-    {
-        if (!f1)
-            return std::forward<F2>(f2);
-        else if (!f2)
-            return std::forward<F1>(f1);
-
-        // otherwise create a combined callback
-        typedef compose_cb_impl<
-            typename util::decay<F1>::type, typename util::decay<F2>::type
-        > result_type;
-        return result_type(std::forward<F1>(f1), std::forward<F2>(f2));
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
-    HPX_EXPORT bool run_on_completed_on_new_thread(
-        util::unique_function_nonser<bool()> && f, error_code& ec);
-
-    ///////////////////////////////////////////////////////////////////////////
     template <typename Result>
     struct future_data_base;
 
     template <>
-    struct future_data_base<traits::detail::future_data_void>
+    struct HPX_EXPORT future_data_base<traits::detail::future_data_void>
       : future_data_refcnt_base
     {
         future_data_base()
@@ -284,32 +197,13 @@ namespace detail
           : future_data_refcnt_base(no_addref), state_(empty)
         {}
 
+        using future_data_refcnt_base::completed_callback_type;
+        using future_data_refcnt_base::completed_callback_vector_type;
         typedef lcos::local::spinlock mutex_type;
         typedef util::unused_type result_type;
         typedef future_data_refcnt_base::init_no_addref init_no_addref;
 
-        virtual ~future_data_base() noexcept {}
-        virtual void execute_deferred(error_code& = throws) = 0;
-        virtual bool cancelable() const = 0;
-        virtual void cancel() = 0;
-        virtual result_type* get_result_void(error_code& = throws) = 0;
-        virtual void wait(error_code& = throws) = 0;
-        virtual future_status wait_until(util::steady_clock::time_point const&,
-            error_code& = throws) = 0;
-        virtual std::exception_ptr get_exception_ptr() const = 0;
-
-        virtual std::string const& get_registered_name() const
-        {
-            HPX_THROW_EXCEPTION(invalid_status,
-                "future_data_base::get_registered_name",
-                "this future does not support name registration");
-        }
-        virtual void register_as(std::string const& name, bool manage_lifetime)
-        {
-            HPX_THROW_EXCEPTION(invalid_status,
-                "future_data_base::set_registered_name",
-                "this future does not support name registration");
-        }
+        virtual ~future_data_base();
 
         enum state
         {
@@ -321,89 +215,22 @@ namespace detail
 
         /// Return whether or not the data is available for this
         /// \a future.
-        bool is_ready() const
+        bool is_ready(std::memory_order order = std::memory_order_acquire) const
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            return is_ready_locked(l);
-        }
-
-        template <typename Lock>
-        bool is_ready_locked(Lock& l) const
-        {
-            HPX_ASSERT_OWNS_LOCK(l);
-            return (state_ & ready) != 0;
+            return (state_.load(order) & ready) != 0;
         }
 
         bool has_value() const
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            return state_ == value;
+            return state_.load(std::memory_order_acquire) == value;
         }
 
         bool has_exception() const
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            return state_ == exception;
+            return state_.load(std::memory_order_acquire) == exception;
         }
 
-    protected:
-         mutable mutex_type mtx_;
-         state state_;                               // current state
-    };
-
-    template <typename Result>
-    struct future_data_base
-      : future_data_base<traits::detail::future_data_void>
-    {
-        HPX_NON_COPYABLE(future_data_base);
-
-        typedef typename future_data_result<Result>::type result_type;
-        typedef util::unique_function_nonser<void()> completed_callback_type;
-        typedef lcos::local::spinlock mutex_type;
-        typedef typename future_data_base<
-                traits::detail::future_data_void
-            >::init_no_addref init_no_addref;
-
-        future_data_base() = default;
-
-        future_data_base(init_no_addref no_addref)
-          : future_data_base<traits::detail::future_data_void>(no_addref)
-        {}
-
-        template <typename Target>
-        future_data_base(Target && data, init_no_addref no_addref)
-          : future_data_base<traits::detail::future_data_void>(no_addref)
-        {
-            result_type* value_ptr =
-                reinterpret_cast<result_type*>(&storage_);
-            ::new ((void*)value_ptr) result_type(
-                future_data_result<Result>::set(std::forward<Target>(data)));
-            state_ = value;
-        }
-
-        future_data_base(std::exception_ptr const& e, init_no_addref no_addref)
-          : future_data_base<traits::detail::future_data_void>(no_addref)
-        {
-            std::exception_ptr* exception_ptr =
-                reinterpret_cast<std::exception_ptr*>(&storage_);
-            ::new ((void*)exception_ptr) std::exception_ptr(e);
-            state_ = exception;
-        }
-        future_data_base(std::exception_ptr && e, init_no_addref no_addref)
-          : future_data_base<traits::detail::future_data_void>(no_addref)
-        {
-            std::exception_ptr* exception_ptr =
-                reinterpret_cast<std::exception_ptr*>(&storage_);
-            ::new ((void*)exception_ptr) std::exception_ptr(std::move(e));
-            state_ = exception;
-        }
-
-        virtual ~future_data_base() noexcept
-        {
-            reset();
-        }
-
-        virtual void execute_deferred(error_code& ec = throws) {}
+        virtual void execute_deferred(error_code& /*ec*/ = throws) {}
 
         // cancellation is disabled by default
         virtual bool cancelable() const
@@ -415,6 +242,124 @@ namespace detail
             HPX_THROW_EXCEPTION(future_does_not_support_cancellation,
                 "future_data_base::cancel",
                 "this future does not support cancellation");
+        }
+
+        result_type* get_result_void(void const* storage, error_code& ec = throws);
+        virtual result_type* get_result_void(error_code& ec = throws) = 0;
+
+        virtual void set_exception(std::exception_ptr data) = 0;
+
+        // continuation support
+
+        // deferred execution of a given continuation
+        static void run_on_completed(
+            completed_callback_type&& on_completed) noexcept;
+        static void run_on_completed(
+            completed_callback_vector_type&& on_completed) noexcept;
+
+        // make sure continuation invocation does not recurse deeper than
+        // allowed
+        template <typename Callback>
+        static void handle_on_completed(Callback&& on_completed);
+
+        /// Set the callback which needs to be invoked when the future becomes
+        /// ready. If the future is ready the function will be invoked
+        /// immediately.
+        void set_on_completed(completed_callback_type data_sink) override;
+
+        virtual state wait(error_code& ec = throws);
+
+        virtual future_status wait_until(
+            util::steady_clock::time_point const& abs_time, error_code& ec = throws);
+
+        virtual std::exception_ptr get_exception_ptr() const = 0;
+
+        virtual std::string const& get_registered_name() const
+        {
+            HPX_THROW_EXCEPTION(invalid_status,
+                "future_data_base::get_registered_name",
+                "this future does not support name registration");
+        }
+        virtual void register_as(std::string const& /*name*/, bool /*manage_lifetime*/)
+        {
+            HPX_THROW_EXCEPTION(invalid_status,
+                "future_data_base::set_registered_name",
+                "this future does not support name registration");
+        }
+
+    protected:
+        mutable mutex_type mtx_;
+        std::atomic<state> state_;                  // current state
+        completed_callback_vector_type on_completed_;
+        local::detail::condition_variable cond_;    // threads waiting in read
+    };
+
+    struct in_place {};
+
+    template <typename Result>
+    struct future_data_base
+      : future_data_base<traits::detail::future_data_void>
+    {
+        HPX_NON_COPYABLE(future_data_base);
+
+    private:
+        static void construct(void* p)
+        {
+            ::new (p) result_type();
+        }
+
+        template <typename T, typename ... Ts>
+        static void construct(void* p, T && t, Ts &&... ts)
+        {
+            ::new (p) result_type(
+                future_data_result<Result>::set(std::forward<T>(t)),
+                std::forward<Ts>(ts)...);
+        }
+
+    public:
+        typedef typename future_data_result<Result>::type result_type;
+        typedef future_data_base<traits::detail::future_data_void> base_type;
+        typedef lcos::local::spinlock mutex_type;
+        typedef typename base_type::init_no_addref init_no_addref;
+        typedef typename base_type::completed_callback_type completed_callback_type;
+        typedef typename base_type::completed_callback_vector_type
+            completed_callback_vector_type;
+
+        future_data_base() = default;
+
+        future_data_base(init_no_addref no_addref)
+          : base_type(no_addref)
+        {}
+
+        template <typename ... Ts>
+        future_data_base(init_no_addref no_addref, in_place, Ts&&... ts)
+          : base_type(no_addref)
+        {
+            result_type* value_ptr = reinterpret_cast<result_type*>(&storage_);
+            construct(value_ptr, std::forward<Ts>(ts)...);
+            state_.store(value, std::memory_order_relaxed);
+        }
+
+        future_data_base(init_no_addref no_addref, std::exception_ptr const& e)
+          : base_type(no_addref)
+        {
+            std::exception_ptr* exception_ptr =
+                reinterpret_cast<std::exception_ptr*>(&storage_);
+            ::new ((void*)exception_ptr) std::exception_ptr(e);
+            state_.store(exception, std::memory_order_relaxed);
+        }
+        future_data_base(init_no_addref no_addref, std::exception_ptr && e)
+          : base_type(no_addref)
+        {
+            std::exception_ptr* exception_ptr =
+                reinterpret_cast<std::exception_ptr*>(&storage_);
+            ::new ((void*)exception_ptr) std::exception_ptr(std::move(e));
+            state_.store(exception, std::memory_order_relaxed);
+        }
+
+        virtual ~future_data_base() noexcept
+        {
+            reset();
         }
 
         /// Get the result of the requested action. This call blocks (yields
@@ -435,183 +380,53 @@ namespace detail
         ///               error description if <code>&ec == &throws</code>.
         virtual result_type* get_result(error_code& ec = throws)
         {
-            // yields control if needed
-            wait(ec);
-            if (ec) return nullptr;
-
-            // No locking is required. Once a future has been made ready, which
-            // is a postcondition of wait, either:
-            //
-            // - there is only one writer (future), or
-            // - there are multiple readers only (shared_future, lock hurts
-            //   concurrency)
-
-            if (state_ == empty) {
-                // the value has already been moved out of this future
-                HPX_THROWS_IF(ec, no_state,
-                    "future_data_base::get_result",
-                    "this future has no valid shared state");
-                return nullptr;
-            }
-
-            // the thread has been re-activated by one of the actions
-            // supported by this promise (see promise::set_event
-            // and promise::set_exception).
-            if (state_ == exception)
-            {
-                std::exception_ptr* exception_ptr =
-                    reinterpret_cast<std::exception_ptr*>(&storage_);
-                // an error has been reported in the meantime, throw or set
-                // the error code
-                if (&ec == &throws) {
-                    std::rethrow_exception(*exception_ptr);
-                    // never reached
-                }
-                else {
-                    ec = make_error_code(*exception_ptr);
-                }
-                return nullptr;
-            }
-            return reinterpret_cast<result_type*>(&storage_);
+            if (get_result_void(ec) != nullptr)
+                return reinterpret_cast<result_type*>(&storage_);
+            return nullptr;
         }
 
-        virtual util::unused_type* get_result_void(error_code& ec = throws)
+        util::unused_type* get_result_void(error_code& ec = throws) override
         {
-            // yields control if needed
-            wait(ec);
-            if (ec) return nullptr;
-
-            // No locking is required. Once a future has been made ready, which
-            // is a postcondition of wait, either:
-            //
-            // - there is only one writer (future), or
-            // - there are multiple readers only (shared_future, lock hurts
-            //   concurrency)
-
-            if (state_ == empty) {
-                // the value has already been moved out of this future
-                HPX_THROWS_IF(ec, no_state,
-                    "future_data_base::get_result",
-                    "this future has no valid shared state");
-                return nullptr;
-            }
-
-            // the thread has been re-activated by one of the actions
-            // supported by this promise (see promise::set_event
-            // and promise::set_exception).
-            if (state_ == exception)
-            {
-                std::exception_ptr* exception_ptr =
-                    reinterpret_cast<std::exception_ptr*>(&storage_);
-                // an error has been reported in the meantime, throw or set
-                // the error code
-                if (&ec == &throws) {
-                    std::rethrow_exception(*exception_ptr);
-                    // never reached
-                }
-                else {
-                    ec = make_error_code(*exception_ptr);
-                }
-                return nullptr;
-            }
-
-            static util::unused_type unused_;
-            return &unused_;
+            return base_type::get_result_void(&storage_, ec);
         }
 
-        // deferred execution of a given continuation
-        bool run_on_completed(completed_callback_type && on_completed,
-            std::exception_ptr& ptr)
+        // Set the result of the requested action.
+        template <typename ... Ts>
+        void set_value(Ts&& ... ts)
         {
-            try {
-                hpx::util::annotate_function annotate(on_completed);
-                on_completed();
-            }
-            catch (...) {
-                ptr = std::current_exception();
-                return false;
-            }
-            return true;
-        }
+            // Note: it is safe to access the data store as no other thread
+            //       should access it concurrently. There shouldn't be any
+            //       threads attempting to read the value as the state is still
+            //       empty. Also, there can be only one thread (this thread)
+            //       attempting to set the value by definition.
 
-        // make sure continuation invocation does not recurse deeper than
-        // allowed
-        void handle_on_completed(completed_callback_type && on_completed)
-        {
-            // We need to run the completion on a new thread if we are on a
-            // non HPX thread.
-            bool recurse_asynchronously = hpx::threads::get_self_ptr() == nullptr;
-#if defined(HPX_HAVE_THREADS_GET_STACK_POINTER)
-            recurse_asynchronously =
-                !this_thread::has_sufficient_stack_space();
-#else
-            handle_continuation_recursion_count cnt;
-            recurse_asynchronously = recurse_asynchronously ||
-                cnt.count_ > HPX_CONTINUATION_MAX_RECURSION_DEPTH;
-#endif
-            if (!recurse_asynchronously)
+            // set the data
+            result_type* value_ptr = reinterpret_cast<result_type*>(&storage_);
+            construct(value_ptr, std::forward<Ts>(ts)...);
+
+            // At this point the lock needs to be acquired to safely access the
+            // registered continuations
+            std::unique_lock<mutex_type> l(mtx_);
+
+            // handle all threads waiting for the future to become ready
+            auto on_completed = std::move(on_completed_);
+            on_completed_.clear();
+
+            // The value has been set, changing the state to 'value' at this
+            // point signals to all other threads that this future is ready.
+            state expected = empty;
+            if (!state_.compare_exchange_strong(
+                    expected, value, std::memory_order_release))
             {
-                // directly execute continuation on this thread
-                std::exception_ptr ptr;
-                if (!run_on_completed(std::move(on_completed), ptr))
-                {
-                    error_code ec(lightweight);
-                    set_exception(hpx::detail::access_exception(ec));
-                }
-            }
-            else
-            {
-                // re-spawn continuation on a new thread
-                boost::intrusive_ptr<future_data_base> this_(this);
-
-                error_code ec(lightweight);
-                std::exception_ptr ptr;
-                if (!run_on_completed_on_new_thread(
-                        util::deferred_call(
-                            &future_data_base::run_on_completed,
-                            std::move(this_), std::move(on_completed),
-                            std::ref(ptr)),
-                        ec))
-                {
-                    // thread creation went wrong
-                    if (ec) {
-                        set_exception(hpx::detail::access_exception(ec));
-                        return;
-                    }
-
-                    // re-throw exception in this context
-                    HPX_ASSERT(ptr);        // exception should have been set
-                    std::rethrow_exception(ptr);
-                }
-            }
-        }
-
-        /// Set the result of the requested action.
-        template <typename Target>
-        void set_value(Target && data, error_code& ec = throws)
-        {
-            std::unique_lock<mutex_type> l(this->mtx_);
-
-            // check whether the data has already been set
-            if (is_ready_locked(l)) {
+                // this future should be 'empty' still (it can't be made ready
+                // more than once).
                 l.unlock();
-                HPX_THROWS_IF(ec, promise_already_satisfied,
+                HPX_THROW_EXCEPTION(promise_already_satisfied,
                     "future_data_base::set_value",
                     "data has already been set for this future");
                 return;
             }
 
-            completed_callback_type on_completed = std::move(this->on_completed_);
-
-            // set the data
-            result_type* value_ptr =
-                reinterpret_cast<result_type*>(&storage_);
-            ::new ((void*)value_ptr) result_type(
-                future_data_result<Result>::set(std::forward<Target>(data)));
-            state_ = value;
-
-            // handle all threads waiting for the future to become ready
-
             // Note: we use notify_one repeatedly instead of notify_all as we
             //       know: a) that most of the time we have at most one thread
             //       waiting on the future (most futures are not shared), and
@@ -619,44 +434,55 @@ namespace detail
             //       relinquishes the lock before resuming the waiting thread
             //       which avoids suspension of this thread when it tries to
             //       re-lock the mutex while exiting from condition_variable::wait
-            while (cond_.notify_one(std::move(l), threads::thread_priority_boost, ec))
+            while (cond_.notify_one(std::move(l), threads::thread_priority_boost))
             {
-                l = std::unique_lock<mutex_type>(this->mtx_);
+                l = std::unique_lock<mutex_type>(mtx_);
             }
 
             // Note: cv.notify_one() above 'consumes' the lock 'l' and leaves
             //       it unlocked when returning.
 
             // invoke the callback (continuation) function
-            if (on_completed)
+            if (!on_completed.empty())
                 handle_on_completed(std::move(on_completed));
         }
 
-        template <typename Target>
-        void set_exception(Target && data, error_code& ec = throws)
+        void set_exception(std::exception_ptr data) override
         {
-            std::unique_lock<mutex_type> l(this->mtx_);
+            // Note: it is safe to access the data store as no other thread
+            //       should access it concurrently. There shouldn't be any
+            //       threads attempting to read the value as the state is still
+            //       empty. Also, there can be only one thread (this thread)
+            //       attempting to set the value by definition.
 
-            // check whether the data has already been set
-            if (is_ready_locked(l)) {
+            // set the data
+            std::exception_ptr* exception_ptr =
+                reinterpret_cast<std::exception_ptr*>(&storage_);
+            ::new ((void*)exception_ptr) std::exception_ptr(std::move(data));
+
+            // At this point the lock needs to be acquired to safely access the
+            // registered continuations
+            std::unique_lock<mutex_type> l(mtx_);
+
+            // handle all threads waiting for the future to become ready
+            auto on_completed = std::move(on_completed_);
+            on_completed_.clear();
+
+            // The value has been set, changing the state to 'exception' at this
+            // point signals to all other threads that this future is ready.
+            state expected = empty;
+            if (!state_.compare_exchange_strong(
+                    expected, exception, std::memory_order_release))
+            {
+                // this future should be 'empty' still (it can't be made ready
+                // more than once).
                 l.unlock();
-                HPX_THROWS_IF(ec, promise_already_satisfied,
+                HPX_THROW_EXCEPTION(promise_already_satisfied,
                     "future_data_base::set_exception",
                     "data has already been set for this future");
                 return;
             }
 
-            completed_callback_type on_completed = std::move(this->on_completed_);
-
-            // set the data
-            std::exception_ptr* exception_ptr =
-                reinterpret_cast<std::exception_ptr*>(&storage_);
-            ::new ((void*)exception_ptr) std::exception_ptr(
-                std::forward<Target>(data));
-            state_ = exception;
-
-            // handle all threads waiting for the future to become ready
-
             // Note: we use notify_one repeatedly instead of notify_all as we
             //       know: a) that most of the time we have at most one thread
             //       waiting on the future (most futures are not shared), and
@@ -664,16 +490,16 @@ namespace detail
             //       relinquishes the lock before resuming the waiting thread
             //       which avoids suspension of this thread when it tries to
             //       re-lock the mutex while exiting from condition_variable::wait
-            while (cond_.notify_one(std::move(l), threads::thread_priority_boost, ec))
+            while (cond_.notify_one(std::move(l), threads::thread_priority_boost))
             {
-                l = std::unique_lock<mutex_type>(this->mtx_);
+                l = std::unique_lock<mutex_type>(mtx_);
             }
 
             // Note: cv.notify_one() above 'consumes' the lock 'l' and leaves
             //       it unlocked when returning.
 
             // invoke the callback (continuation) function
-            if (on_completed)
+            if (!on_completed.empty())
                 handle_on_completed(std::move(on_completed));
         }
 
@@ -681,6 +507,22 @@ namespace detail
         // non-successful)
         template <typename T>
         void set_data(T && result)
+        {
+            // set the received result, reset error status
+            try {
+                // store the value
+                set_value(std::forward<T>(result));
+            }
+            catch (...) {
+                // store the error instead
+                return set_exception(std::current_exception());
+            }
+        }
+
+        // helper functions for setting data (if successful) or the error (if
+        // non-successful)
+        template <typename T>
+        void set_remote_data(T && result)
         {
             // set the received result, reset error status
             try {
@@ -720,7 +562,7 @@ namespace detail
             // and no reader
 
             // release any stored data and callback functions
-            switch (state_) {
+            switch (state_.exchange(empty)) {
             case value:
             {
                 result_type* value_ptr =
@@ -738,89 +580,22 @@ namespace detail
             default: break;
             }
 
-            state_ = empty;
-            on_completed_ = completed_callback_type();
+            on_completed_.clear();
         }
 
-        // continuation support
-
-        /// Set the callback which needs to be invoked when the future becomes
-        /// ready. If the future is ready the function will be invoked
-        /// immediately.
-        void set_on_completed(completed_callback_type data_sink)
+        std::exception_ptr get_exception_ptr() const override
         {
-            if (!data_sink) return;
-
-            std::unique_lock<mutex_type> l(this->mtx_);
-
-            if (is_ready_locked(l)) {
-
-                HPX_ASSERT(!on_completed_);
-
-                // invoke the callback (continuation) function right away
-                l.unlock();
-
-                handle_on_completed(std::move(data_sink));
-            }
-            else {
-                // store a combined callback wrapping the old and the new one
-                // make sure continuations are evaluated in the order they are
-                // attached
-                this->on_completed_ = compose_cb(
-                    std::move(on_completed_), std::move(data_sink));
-            }
-        }
-
-        virtual void wait(error_code& ec = throws)
-        {
-            std::unique_lock<mutex_type> l(mtx_);
-
-            // block if this entry is empty
-            if (state_ == empty) {
-                cond_.wait(l, "future_data_base::wait", ec);
-                if (ec) return;
-            }
-
-            if (&ec != &throws)
-                ec = make_success_code();
-        }
-
-        virtual future_status
-        wait_until(util::steady_clock::time_point const& abs_time,
-            error_code& ec = throws)
-        {
-            std::unique_lock<mutex_type> l(mtx_);
-
-            // block if this entry is empty
-            if (state_ == empty) {
-                threads::thread_state_ex_enum const reason =
-                    cond_.wait_until(l, abs_time,
-                        "future_data_base::wait_until", ec);
-                if (ec) return future_status::uninitialized;
-
-                if (reason == threads::wait_timeout)
-                    return future_status::timeout;
-
-                return future_status::ready;
-            }
-
-            if (&ec != &throws)
-                ec = make_success_code();
-
-            return future_status::ready; //-V110
-        }
-
-        std::exception_ptr get_exception_ptr() const
-        {
-            HPX_ASSERT(state_ == exception);
+            HPX_ASSERT(state_.load(std::memory_order_acquire) == exception);
             return *reinterpret_cast<std::exception_ptr const*>(&storage_);
         }
 
     protected:
-        completed_callback_type on_completed_;
+        using base_type::mtx_;
+        using base_type::state_;
+        using base_type::on_completed_;
 
     private:
-        local::detail::condition_variable cond_;    // threads waiting in read
+        using base_type::cond_;
         typename future_data_storage<Result>::type storage_;
     };
 
@@ -840,16 +615,16 @@ namespace detail
           : future_data_base<Result>(no_addref)
         {}
 
-        template <typename Target>
-        future_data(Target && data, init_no_addref no_addref)
-          : future_data_base<Result>(std::move(data), no_addref)
+        template <typename ... Ts>
+        future_data(init_no_addref no_addref, in_place in_place, Ts&&... ts)
+          : future_data_base<Result>(no_addref, in_place, std::forward<Ts>(ts)...)
         {}
 
-        future_data(std::exception_ptr const& e, init_no_addref no_addref)
-          : future_data_base<Result>(e, no_addref)
+        future_data(init_no_addref no_addref, std::exception_ptr const& e)
+          : future_data_base<Result>(no_addref, e)
         {}
-        future_data(std::exception_ptr && e, init_no_addref no_addref)
-          : future_data_base<Result>(std::move(e), no_addref)
+        future_data(init_no_addref no_addref, std::exception_ptr && e)
+          : future_data_base<Result>(no_addref, std::move(e))
         {}
 
         ~future_data() noexcept override = default;
@@ -870,24 +645,27 @@ namespace detail
             other_allocator;
 
         future_data_allocator(other_allocator const& alloc)
-          : future_data<Result>(), alloc_(alloc)
+          : future_data<Result>()
+          , alloc_(alloc)
         {}
+
+        template <typename... T>
         future_data_allocator(init_no_addref no_addref,
-                other_allocator const& alloc)
-          : future_data<Result>(no_addref), alloc_(alloc)
+                in_place in_place, other_allocator const& alloc, T&&... ts)
+          : future_data<Result>(no_addref, in_place, std::forward<T>(ts)...)
+          , alloc_(alloc)
         {}
-        template <typename Target>
-        future_data_allocator(Target && data, init_no_addref no_addref,
-                other_allocator const& alloc)
-          : future_data<Result>(std::move(data), no_addref), alloc_(alloc)
+
+        future_data_allocator(init_no_addref no_addref,
+                std::exception_ptr const& e, other_allocator const& alloc)
+          : future_data<Result>(no_addref, e)
+          , alloc_(alloc)
         {}
-        future_data_allocator(std::exception_ptr const& e,
-                init_no_addref no_addref, other_allocator const& alloc)
-          : future_data<Result>(e, no_addref), alloc_(alloc)
-        {}
-        future_data_allocator(std::exception_ptr && e,
-                init_no_addref no_addref, other_allocator const& alloc)
-          : future_data<Result>(std::move(e), no_addref), alloc_(alloc)
+
+        future_data_allocator(init_no_addref no_addref,
+                std::exception_ptr && e, other_allocator const& alloc)
+          : future_data<Result>(no_addref, std::move(e))
+          , alloc_(alloc)
         {}
 
     private:
@@ -925,12 +703,14 @@ namespace detail
 
             error_code ec;
             threads::thread_id_type id = threads::register_thread_nullary(
-                util::bind(util::one_shot(&timed_future_data::set_value),
-                    std::move(this_),
-                    future_data_result<Result>::set(std::forward<Result_>(init))),
+                [HPX_CAPTURE_MOVE(this_), HPX_CAPTURE_FORWARD(init)]()
+                {
+                    this_->set_value(init);
+                },
                 "timed_future_data<Result>::timed_future_data",
                 threads::suspended, true, threads::thread_priority_boost,
-                std::size_t(-1), threads::thread_stacksize_current, ec);
+                threads::thread_schedule_hint(),
+                threads::thread_stacksize_current, ec);
             if (ec) {
                 // thread creation failed, report error to the new future
                 this->base_type::set_exception(hpx::detail::access_exception(ec));
@@ -938,16 +718,11 @@ namespace detail
 
             // start new thread at given point in time
             threads::set_thread_state(id, abs_time, threads::pending,
-                threads::wait_timeout, threads::thread_priority_boost, ec);
+                threads::wait_timeout, threads::thread_priority_boost, true, ec);
             if (ec) {
                 // thread scheduling failed, report error to the new future
                 this->base_type::set_exception(hpx::detail::access_exception(ec));
             }
-        }
-
-        void set_value(result_type const& value)
-        {
-            this->base_type::set_value(value);
         }
     };
 
@@ -964,25 +739,14 @@ namespace detail
 
     public:
         task_base()
-          : started_(false), sched_(nullptr)
+          : started_(false)
         {}
 
         task_base(init_no_addref no_addref)
-          : base_type(no_addref), started_(false), sched_(nullptr)
+          : base_type(no_addref), started_(false)
         {}
 
-        task_base(threads::executor& sched)
-          : started_(false),
-            sched_(sched ? &sched : nullptr)
-        {}
-
-        task_base(threads::executor& sched, init_no_addref no_addref)
-          : base_type(no_addref),
-            started_(false),
-            sched_(sched ? &sched : nullptr)
-        {}
-
-        virtual void execute_deferred(error_code& ec = throws)
+        virtual void execute_deferred(error_code& /*ec*/ = throws)
         {
             if (!started_test_and_set())
                 this->do_run();
@@ -997,11 +761,11 @@ namespace detail
         }
 
         // wait support
-        virtual void wait(error_code& ec = throws)
+        virtual typename base_type::state wait(error_code& ec = throws)
         {
             if (!started_test_and_set())
                 this->do_run();
-            this->future_data<Result>::wait(ec);
+            return this->future_data<Result>::wait(ec);
         }
 
         virtual future_status
@@ -1060,9 +824,11 @@ namespace detail
         }
 
         // run in a separate thread
-        virtual threads::thread_id_type apply(launch policy,
-            threads::thread_priority priority,
-            threads::thread_stacksize stacksize, error_code& ec)
+        virtual threads::thread_id_type apply(launch /*policy*/,
+            threads::thread_priority /*priority*/,
+            threads::thread_stacksize /*stacksize*/,
+            threads::thread_schedule_hint /*schedulehint*/,
+            error_code& /*ec*/)
         {
             HPX_ASSERT(false);      // shouldn't ever be called
             return threads::invalid_thread_id;
@@ -1072,7 +838,8 @@ namespace detail
         static threads::thread_result_type run_impl(future_base_type this_)
         {
             this_->do_run();
-            return threads::thread_result_type(threads::terminated, nullptr);
+            return threads::thread_result_type(
+                threads::terminated, threads::invalid_thread_id);
         }
 
     public:
@@ -1082,10 +849,9 @@ namespace detail
             this->future_data<Result>::set_data(std::forward<T>(result));
         }
 
-        void set_exception(
-            std::exception_ptr const& e, error_code& ec = throws)
+        void set_exception(std::exception_ptr e)
         {
-            this->future_data<Result>::set_exception(e, ec);
+            this->future_data<Result>::set_exception(std::move(e));
         }
 
         virtual void do_run()
@@ -1095,7 +861,6 @@ namespace detail
 
     protected:
         bool started_;
-        threads::executor* sched_;
     };
 
     ///////////////////////////////////////////////////////////////////////////
@@ -1129,14 +894,6 @@ namespace detail
           : task_base<Result>(no_addref), id_(threads::invalid_thread_id)
         {}
 
-        cancelable_task_base(threads::executor& sched)
-          : task_base<Result>(sched), id_(threads::invalid_thread_id)
-        {}
-
-        cancelable_task_base(threads::executor& sched, init_no_addref no_addref)
-          : task_base<Result>(sched, no_addref), id_(threads::invalid_thread_id)
-        {}
-
     private:
         struct reset_id
         {
@@ -1157,7 +914,8 @@ namespace detail
         {
             reset_id r(*this_);
             this_->do_run();
-            return threads::thread_result_type(threads::terminated, nullptr);
+            return threads::thread_result_type(
+                threads::terminated, threads::invalid_thread_id);
         }
 
     public:
@@ -1174,7 +932,7 @@ namespace detail
                 if (!this->started_)
                     HPX_THROW_THREAD_INTERRUPTED_EXCEPTION();
 
-                if (this->is_ready_locked(l))
+                if (this->is_ready())
                     return;   // nothing we can do
 
                 if (id_ != threads::invalid_thread_id) {
@@ -1217,31 +975,8 @@ namespace hpx { namespace traits
             typedef lcos::detail::future_data_allocator<R, Allocator> type;
         };
     }
-
-#if defined(HPX_HAVE_THREAD_DESCRIPTION)
-    ///////////////////////////////////////////////////////////////////////////
-    template <typename F1, typename F2>
-    struct get_function_annotation<lcos::detail::compose_cb_impl<F1, F2> >
-    {
-        static char const*
-            call(lcos::detail::compose_cb_impl<F1, F2> const& f) noexcept
-        {
-            return get_function_annotation<F1>::call(f.f1_);
-        }
-    };
-
-#if HPX_HAVE_ITTNOTIFY != 0 && !defined(HPX_HAVE_APEX)
-    template <typename F1, typename F2>
-    struct get_function_annotation_itt<lcos::detail::compose_cb_impl<F1, F2> >
-    {
-        static util::itt::string_handle
-            call(lcos::detail::compose_cb_impl<F1, F2> const& f) noexcept
-        {
-            return get_function_annotation_itt<F1>::call(f.f1_);
-        }
-    };
-#endif
-#endif
 }}
+
+#include <hpx/config/warnings_suffix.hpp>
 
 #endif

@@ -1,3 +1,4 @@
+//  Copyright (c)      2018 Mikael Simberg
 //  Copyright (c) 2007-2016 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -12,13 +13,14 @@
 #include <hpx/runtime/shutdown_function.hpp>
 #include <hpx/runtime/startup_function.hpp>
 #include <hpx/util/assert.hpp>
-#include <hpx/util/bind.hpp>
+#include <hpx/util/bind_back.hpp>
 #include <hpx/util/find_prefix.hpp>
 #include <hpx/util/function.hpp>
 
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/variables_map.hpp>
 
+#include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
@@ -53,7 +55,7 @@ namespace hpx
     /// This is the main, non-blocking entry point for any HPX application.
     /// This function (or one of its overloads below) should be called from the
     /// users `main()` function. It will set up the HPX runtime environment and
-    /// schedule the function given by \p f as a HPX thread. It will return
+    /// schedule the function given by \p f as an HPX thread. It will return
     /// immediately after that. Use `hpx::wait` and `hpx::stop` to synchronize
     /// with the runtime system's execution.
     inline bool start(
@@ -82,7 +84,7 @@ namespace hpx
     /// This is the main, non-blocking entry point for any HPX application.
     /// This function (or one of its overloads below) should be called from the
     /// users `main()` function. It will set up the HPX runtime environment and
-    /// schedule the function given by \p f as a HPX thread. It will return
+    /// schedule the function given by \p f as an HPX thread. It will return
     /// immediately after that. Use `hpx::wait` and `hpx::stop` to synchronize
     /// with the runtime system's execution.
     inline bool
@@ -284,7 +286,7 @@ namespace hpx
             "Usage: " + app_name +  " [options]");
 
         util::function_nonser<int(boost::program_options::variables_map& vm)>
-            main_f = util::bind(detail::init_helper, util::placeholders::_1, f);
+            main_f = util::bind_back(detail::init_helper, f);
         std::vector<std::string> cfg;
 
         HPX_ASSERT(argc != 0 && argv != nullptr);
@@ -312,7 +314,50 @@ namespace hpx
             "Usage: " + app_name +  " [options]");
 
         util::function_nonser<int(boost::program_options::variables_map& vm)>
-            main_f = util::bind(detail::init_helper, util::placeholders::_1, f);
+            main_f = util::bind_back(detail::init_helper, f);
+
+        HPX_ASSERT(argc != 0 && argv != nullptr);
+
+        return start(main_f, desc_commandline, argc, argv, cfg,
+            startup_function_type(), shutdown_function_type(), mode);
+    }
+
+    inline bool start(std::nullptr_t f, std::string const& app_name, int argc,
+        char** argv, hpx::runtime_mode mode)
+    {
+        using boost::program_options::options_description;
+
+        options_description desc_commandline(
+            "Usage: " + app_name +  " [options]");
+
+        util::function_nonser<int(boost::program_options::variables_map& vm)>
+            main_f;
+        std::vector<std::string> cfg;
+
+        HPX_ASSERT(argc != 0 && argv != nullptr);
+
+        return start(main_f, desc_commandline, argc, argv, cfg,
+            startup_function_type(), shutdown_function_type(), mode);
+    }
+
+    inline bool start(std::nullptr_t f, int argc, char** argv,
+        hpx::runtime_mode mode)
+    {
+        std::string app_name(HPX_APPLICATION_STRING);
+        return start(f, app_name, argc, argv, mode);
+    }
+
+    inline bool start(std::nullptr_t f, int argc, char** argv,
+        std::vector<std::string> const& cfg, hpx::runtime_mode mode)
+    {
+        std::string app_name(HPX_APPLICATION_STRING);
+        using boost::program_options::options_description;
+
+        options_description desc_commandline(
+            "Usage: " + app_name +  " [options]");
+
+        util::function_nonser<int(boost::program_options::variables_map& vm)>
+            main_f;
 
         HPX_ASSERT(argc != 0 && argv != nullptr);
 

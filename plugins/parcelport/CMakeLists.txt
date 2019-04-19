@@ -17,6 +17,7 @@ if(HPX_WITH_NETWORKING)
 endif()
 
 set(HPX_STATIC_PARCELPORT_PLUGINS "" CACHE INTERNAL "" FORCE)
+set(HPX_STATIC_PARCELPORT_PLUGINS_HEADERS "" CACHE INTERNAL "" FORCE)
 set(HPX_STATIC_PARCELPORT_PLUGINS_SOURCES "" CACHE INTERNAL "" FORCE)
 set(HPX_STATIC_PARCELPORT_PLUGINS_PROPERTIES "" CACHE INTERNAL "" FORCE)
 
@@ -77,7 +78,7 @@ macro(add_parcelport name)
         LINK_FLAGS ${${name}_LINK_FLAGS}
         DEPENDENCIES ${${name}_DEPENDENCIES})
 
-    add_hpx_pseudo_dependencies(plugins.parcelport.${name_short} ${name}_lib)
+    add_hpx_pseudo_dependencies(plugins.parcelport.${name_short} ${name})
     add_hpx_pseudo_dependencies(core plugins.parcelport.${name_short})
   endif()
 
@@ -98,7 +99,7 @@ macro(add_static_parcelports)
   endif()
 endmacro()
 
-macro(add_parcelport_modules)
+function(add_parcelport_modules)
   if(HPX_WITH_NETWORKING)
     hpx_debug("creating static_parcelports.hpp: " ${HPX_STATIC_PARCELPORT_PLUGINS})
 
@@ -106,7 +107,9 @@ macro(add_parcelport_modules)
     set(_parcelport_init)
     foreach(parcelport ${HPX_STATIC_PARCELPORT_PLUGINS})
       set(_parcelport_export
-        "${_parcelport_export}HPX_EXPORT hpx::plugins::parcelport_factory_base *parcelport_${parcelport}_factory_init(std::vector<hpx::plugins::parcelport_factory_base *>& factories);\n")
+        "${_parcelport_export}HPX_EXPORT hpx::plugins::parcelport_factory_base *parcelport_${parcelport}_factory_init(\n")
+      set(_parcelport_export
+        "${_parcelport_export}    std::vector<hpx::plugins::parcelport_factory_base *>& factories);\n")
       set(_parcelport_init
         "${_parcelport_init}        parcelport_${parcelport}_factory_init(factories);\n")
     endforeach()
@@ -115,7 +118,7 @@ macro(add_parcelport_modules)
   configure_file("${PROJECT_SOURCE_DIR}/cmake/templates/static_parcelports.hpp.in"
                  "${CMAKE_BINARY_DIR}/hpx/runtime/parcelset/static_parcelports.hpp"
                  @ONLY)
-endmacro()
+endfunction()
 
 #------------------------------------------------------------------------------
 # Write parcelport_defines.hpp

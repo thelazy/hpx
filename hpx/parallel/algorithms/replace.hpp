@@ -83,7 +83,9 @@ namespace hpx { namespace parallel { inline namespace v1
                 return for_each_n<FwdIter>().call(
                     std::forward<ExPolicy>(policy), std::false_type(),
                     first, std::distance(first, last),
-                    [old_value, new_value, proj](type& t) -> void
+                    [old_value, new_value,
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](type& t) -> void
                     {
                         if (hpx::util::invoke(proj, t) == old_value)
                         {
@@ -226,7 +228,10 @@ namespace hpx { namespace parallel { inline namespace v1
                 return for_each_n<FwdIter>().call(
                     std::forward<ExPolicy>(policy), std::false_type(),
                     first, std::distance(first, last),
-                    [f, new_value, proj](type& t) -> void
+                    [new_value,
+                        HPX_CAPTURE_FORWARD(f),
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](type& t) -> void
                     {
                         using hpx::util::invoke;
                         if (invoke(f, invoke(proj, t)))
@@ -390,7 +395,9 @@ namespace hpx { namespace parallel { inline namespace v1
                         std::forward<ExPolicy>(policy), std::false_type(),
                         hpx::util::make_zip_iterator(first, dest),
                         std::distance(first, last),
-                        [old_value, new_value, proj](reference t) -> void
+                        [old_value, new_value,
+                            HPX_CAPTURE_FORWARD(proj)
+                        ](reference t) -> void
                         {
                             using hpx::util::get;
                             if (hpx::util::invoke(proj, get<0>(t)) == old_value)
@@ -486,21 +493,6 @@ namespace hpx { namespace parallel { inline namespace v1
     replace_copy(ExPolicy && policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest,
         T1 const& old_value, T2 const& new_value, Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Requires at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Requires at least forward iterator.");
@@ -509,7 +501,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return hpx::util::make_tagged_pair<tag::in, tag::out>(
             detail::replace_copy<std::pair<FwdIter1, FwdIter2> >().call(
@@ -576,7 +567,10 @@ namespace hpx { namespace parallel { inline namespace v1
                         std::forward<ExPolicy>(policy), std::false_type(),
                         hpx::util::make_zip_iterator(first, dest),
                         std::distance(first, last),
-                        [f, new_value, proj](reference t) -> void
+                        [new_value,
+                            HPX_CAPTURE_FORWARD(f),
+                            HPX_CAPTURE_FORWARD(proj)
+                        ](reference t) -> void
                         {
                             using hpx::util::get;
                             using hpx::util::invoke;
@@ -689,21 +683,6 @@ namespace hpx { namespace parallel { inline namespace v1
     replace_copy_if(ExPolicy && policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest,
         F && f, T const& new_value, Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Requires at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter2>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Requires at least forward iterator.");
@@ -712,7 +691,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return hpx::util::make_tagged_pair<tag::in, tag::out>(
             detail::replace_copy_if<std::pair<FwdIter1, FwdIter2> >().call(

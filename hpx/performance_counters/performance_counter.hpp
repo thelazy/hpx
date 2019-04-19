@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2013 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -10,8 +10,9 @@
 #include <hpx/lcos/future.hpp>
 #include <hpx/runtime/components/client_base.hpp>
 #include <hpx/runtime/launch_policy.hpp>
+#include <hpx/util/bind_front.hpp>
 
-#include <hpx/performance_counters/counters.hpp>
+#include <hpx/performance_counters/counters_fwd.hpp>
 #include <hpx/performance_counters/stubs/performance_counter.hpp>
 
 #include <string>
@@ -64,41 +65,6 @@ namespace hpx { namespace performance_counters
         counter_values_array get_counter_values_array(launch::sync_policy,
             error_code& ec = throws) const;
 
-#if defined(HPX_HAVE_ASYNC_FUNCTION_COMPATIBILITY)
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        counter_info get_info_sync(error_code& ec = throws) const
-        {
-            return get_info(launch::sync, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        counter_value get_counter_value_sync(bool reset = false,
-            error_code& ec = throws)
-        {
-            return get_counter_value(launch::sync, reset, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        counter_value get_counter_value_sync(error_code& ec = throws) const
-        {
-            return get_counter_value(launch::sync, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        counter_values_array get_counter_values_array_sync(bool reset = false,
-            error_code& ec = throws)
-        {
-            return get_counter_values_array(launch::sync, reset, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        counter_values_array get_counter_values_array_sync(
-            error_code& ec = throws) const
-        {
-            return get_counter_values_array(launch::sync, ec);
-        }
-#endif
-
         ///////////////////////////////////////////////////////////////////////
         future<bool> start();
         bool start(launch::sync_policy, error_code& ec = throws);
@@ -109,37 +75,13 @@ namespace hpx { namespace performance_counters
         future<void> reset();
         void reset(launch::sync_policy, error_code& ec = throws);
 
-#if defined(HPX_HAVE_ASYNC_FUNCTION_COMPATIBILITY)
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        bool start_sync(error_code& ec = throws)
-        {
-            return start(launch::sync, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        bool stop_sync(error_code& ec = throws)
-        {
-            return stop(launch::sync, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        void reset_sync(error_code& ec = throws)
-        {
-            return reset(launch::sync, ec);
-        }
-#endif
+        future<void> reinit(bool reset = true);
+        void reinit(
+            launch::sync_policy, bool reset = true, error_code& ec = throws);
 
         ///////////////////////////////////////////////////////////////////////
         future<std::string> get_name() const;
         std::string get_name(launch::sync_policy, error_code& ec = throws) const;
-
-#if defined(HPX_HAVE_ASYNC_FUNCTION_COMPATIBILITY)
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        std::string get_name_sync(error_code& ec = throws) const
-        {
-            return get_name(launch::sync, ec);
-        }
-#endif
 
     private:
         template <typename T>
@@ -153,9 +95,9 @@ namespace hpx { namespace performance_counters
         future<T> get_value(bool reset = false)
         {
             return get_counter_value(reset).then(
-                util::bind(
-                    &performance_counter::extract_value<T>,
-                    util::placeholders::_1));
+                hpx::launch::sync,
+                util::bind_front(
+                    &performance_counter::extract_value<T>));
         }
         template <typename T>
         T get_value(launch::sync_policy, bool reset = false,
@@ -168,30 +110,15 @@ namespace hpx { namespace performance_counters
         future<T> get_value() const
         {
             return get_counter_value().then(
-                util::bind(
-                    &performance_counter::extract_value<T>,
-                    util::placeholders::_1));
+                hpx::launch::sync,
+                util::bind_front(
+                    &performance_counter::extract_value<T>));
         }
         template <typename T>
         T get_value(launch::sync_policy, error_code& ec = throws) const
         {
             return get_counter_value(launch::sync).get_value<T>(ec);
         }
-
-#if defined(HPX_HAVE_ASYNC_FUNCTION_COMPATIBILITY)
-        template <typename T>
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        T get_value_sync(bool reset = false, error_code& ec = throws)
-        {
-            return get_value(launch::sync, reset, ec);
-        }
-        template <typename T>
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        T get_value_sync(error_code& ec = throws) const
-        {
-            return get_value(launch::sync, ec);
-        }
-#endif
     };
 
     /// Return all counters matching the given name (with optional wildcards).

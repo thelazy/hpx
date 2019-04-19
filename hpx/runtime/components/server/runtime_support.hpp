@@ -1,6 +1,6 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //  Copyright (c) 2011 Bryce Lelbach
-//  Copyright (c) 2011 Thomas Heller
+//  Copyright (c) 2011-2017 Thomas Heller
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -11,6 +11,7 @@
 #include <hpx/config.hpp>
 #include <hpx/compat/condition_variable.hpp>
 #include <hpx/compat/mutex.hpp>
+#include <hpx/compat/thread.hpp>
 #include <hpx/throw_exception.hpp>
 #include <hpx/lcos/local/condition_variable.hpp>
 #include <hpx/lcos/local/mutex.hpp>
@@ -19,21 +20,15 @@
 #include <hpx/plugins/plugin_factory_base.hpp>
 #include <hpx/runtime/actions/component_action.hpp>
 #include <hpx/runtime/actions/manage_object_action.hpp>
-#include <hpx/runtime/agas/gva.hpp>
-#include <hpx/runtime/components/component_factory_base.hpp>
 #include <hpx/runtime/components/component_type.hpp>
 #include <hpx/runtime/components/server/create_component.hpp>
 #include <hpx/runtime/components/static_factory_data.hpp>
-#include <hpx/runtime/get_lva.hpp>
 #include <hpx/runtime/find_here.hpp>
 #include <hpx/runtime/parcelset/locality.hpp>
 #include <hpx/traits/action_does_termination_detection.hpp>
 #include <hpx/traits/is_component.hpp>
 #include <hpx/util/assert.hpp>
-#include <hpx/util/bind.hpp>
-#include <hpx/util/functional/new.hpp>
 #include <hpx/util/plugin.hpp>
-#include <hpx/util/unlock_guard.hpp>
 #include <hpx/util_fwd.hpp>
 
 #include <boost/program_options/options_description.hpp>
@@ -44,7 +39,6 @@
 #include <list>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -65,31 +59,7 @@ namespace hpx { namespace components { namespace server
     class runtime_support
     {
     private:
-        typedef lcos::local::spinlock component_map_mutex_type;
         typedef lcos::local::spinlock plugin_map_mutex_type;
-
-        struct component_factory
-        {
-            component_factory() : second(), isenabled(false) {}
-
-            component_factory(
-                  std::shared_ptr<component_factory_base> const& f,
-                  hpx::util::plugin::dll const& d, bool enabled = true)
-              : first(f), second(d), isenabled(enabled)
-            {};
-
-            component_factory(
-                  std::shared_ptr<component_factory_base> const& f,
-                  bool enabled = true)
-              : first(f), second(), isenabled(enabled)
-            {};
-
-            std::shared_ptr<component_factory_base> first;
-            hpx::util::plugin::dll second;
-            bool isenabled;
-        };
-        typedef component_factory component_factory_type;
-        typedef std::map<component_type, component_factory_type> component_map_type;
 
         struct plugin_factory
         {
@@ -135,7 +105,7 @@ namespace hpx { namespace components { namespace server
         /// \param self [in] The HPX \a thread used to execute this function.
         /// \param appl [in] The applier to be used for finalization of the
         ///             component instance.
-        void finalize() {}
+        HPX_CXX14_CONSTEXPR static void finalize() {}
 
         void delete_function_lists();
         void tidy();
@@ -149,10 +119,6 @@ namespace hpx { namespace components { namespace server
 
         ///////////////////////////////////////////////////////////////////////
         // exposed functionality of this component
-
-        /// \brief Action to create N new default constructed components
-        std::vector<naming::gid_type> bulk_create_components(
-            components::component_type type, std::size_t count);
 
         /// \brief Actions to create new objects
         template <typename Component>
@@ -176,17 +142,6 @@ namespace hpx { namespace components { namespace server
         naming::gid_type migrate_component_to_here(
             std::shared_ptr<Component> const& p, naming::id_type);
 
-        /// \brief Action to create new memory block
-        naming::gid_type create_memory_block(std::size_t count,
-            hpx::actions::manage_object_action_base const& act);
-
-        /// \brief Action to delete existing components
-        ///
-        /// \param count [in] This GID is a count of the number of components
-        ///                   to destroy. It does not represent a global address.
-        void free_component(agas::gva const&, naming::gid_type const& gid,
-            std::uint64_t count);
-
         /// \brief Gracefully shutdown this runtime system instance
         void shutdown(double timeout, naming::id_type const& respond_to);
 
@@ -207,11 +162,6 @@ namespace hpx { namespace components { namespace server
         /// \brief Retrieve configuration information
         util::section get_config();
 
-        /// \brief Update the given name mapping into the AGAS cache of this
-        ///        locality.
-        void update_agas_cache_entry(naming::gid_type const&,
-            naming::address const&, std::uint64_t, std::uint64_t);
-
         /// \brief Load all components on this locality.
         int load_components();
 
@@ -224,10 +174,6 @@ namespace hpx { namespace components { namespace server
         /// \brief Create the given performance counter instance.
         naming::gid_type create_performance_counter(
             performance_counters::counter_info const& info);
-
-        /// \brief Return the current instance count for the given component
-        ///        type
-        std::int32_t get_instance_count(components::component_type);
 
         /// \brief Remove the given locality from our connection cache
         void remove_from_connection_cache(naming::gid_type const& gid,
@@ -245,13 +191,9 @@ namespace hpx { namespace components { namespace server
         // Each of the exposed functions needs to be encapsulated into a action
         // type, allowing to generate all require boilerplate code for threads,
         // serialization, etc.
-        HPX_DEFINE_COMPONENT_ACTION(runtime_support, bulk_create_components);
-        HPX_DEFINE_COMPONENT_ACTION(runtime_support, create_memory_block);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, load_components);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, call_startup_functions);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, call_shutdown_functions);
-        HPX_DEFINE_COMPONENT_ACTION(runtime_support, free_component,
-            free_component_action);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, shutdown);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, shutdown_all);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, terminate_act,
@@ -265,10 +207,8 @@ namespace hpx { namespace components { namespace server
         // manager to exit
         HPX_DEFINE_COMPONENT_DIRECT_ACTION(runtime_support, get_config);
 
-        HPX_DEFINE_COMPONENT_ACTION(runtime_support, update_agas_cache_entry);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, garbage_collect);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, create_performance_counter);
-        HPX_DEFINE_COMPONENT_ACTION(runtime_support, get_instance_count);
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, remove_from_connection_cache);
 
         HPX_DEFINE_COMPONENT_ACTION(runtime_support, dijkstra_termination);
@@ -297,33 +237,12 @@ namespace hpx { namespace components { namespace server
         void stopped();
         void notify_waiting_main();
 
-        bool was_stopped() const { return stopped_; }
+        bool was_stopped() const { return stop_called_; }
 
-        void add_pre_startup_function(startup_function_type f)
-        {
-            std::lock_guard<lcos::local::spinlock> l(globals_mtx_);
-            pre_startup_functions_.push_back(std::move(f));
-        }
-
-        void add_startup_function(startup_function_type f)
-        {
-            std::lock_guard<lcos::local::spinlock> l(globals_mtx_);
-            startup_functions_.push_back(std::move(f));
-        }
-
-        void add_pre_shutdown_function(shutdown_function_type f)
-        {
-            std::lock_guard<lcos::local::spinlock> l(globals_mtx_);
-            pre_shutdown_functions_.push_back(std::move(f));
-        }
-
-        void add_shutdown_function(shutdown_function_type f)
-        {
-            std::lock_guard<lcos::local::spinlock> l(globals_mtx_);
-            shutdown_functions_.push_back(std::move(f));
-        }
-
-        bool keep_factory_alive(component_type t);
+        void add_pre_startup_function(startup_function_type f);
+        void add_startup_function(startup_function_type f);
+        void add_pre_shutdown_function(shutdown_function_type f);
+        void add_shutdown_function(shutdown_function_type f);
 
         void remove_here_from_connection_cache();
         void remove_here_from_console_connection_cache();
@@ -421,8 +340,10 @@ namespace hpx { namespace components { namespace server
         compat::mutex mtx_;
         compat::condition_variable wait_condition_;
         compat::condition_variable stop_condition_;
-        bool stopped_;
+        bool stop_called_;
+        bool stop_done_;
         bool terminated_;
+        compat::thread::id main_thread_id_;
         bool dijkstra_color_;   // false: white, true: black
         std::atomic<bool> shutdown_all_invoked_;
 
@@ -430,10 +351,8 @@ namespace hpx { namespace components { namespace server
         dijkstra_mtx_type dijkstra_mtx_;
         lcos::local::condition_variable_any dijkstra_cond_;
 
-        component_map_mutex_type cm_mtx_;
         plugin_map_mutex_type p_mtx_;
 
-        component_map_type components_;
         plugin_map_type plugins_;
         modules_map_type & modules_;
         static_modules_type static_modules_;
@@ -469,42 +388,8 @@ namespace hpx { namespace components { namespace server
             components::get_component_type<
                 typename Component::wrapped_type>();
 
-        std::unique_lock<component_map_mutex_type> l(cm_mtx_);
-        component_map_type::const_iterator it = components_.find(type);
-        if (it == components_.end()) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (component type not found in map)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return naming::invalid_gid;
-        }
-
-        if (!(*it).second.first) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (map entry is nullptr)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return naming::invalid_gid;
-        }
-
-        naming::gid_type id;
-        std::shared_ptr<component_factory_base> factory((*it).second.first);
-        {
-            util::unlock_guard<std::unique_lock<component_map_mutex_type> > ul(l);
-            id = factory->create();
-        }
+        typedef typename Component::wrapping_type wrapping_type;
+        naming::gid_type id = create<wrapping_type>();
         LRT_(info) << "successfully created component " << id
             << " of type: " << components::get_component_type_name(type);
 
@@ -518,52 +403,14 @@ namespace hpx { namespace components { namespace server
             components::get_component_type<
                 typename Component::wrapped_type>();
 
-        std::unique_lock<component_map_mutex_type> l(cm_mtx_);
-        component_map_type::const_iterator it = components_.find(type);
-        if (it == components_.end()) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (component type not found in map)";
+        typedef typename Component::wrapping_type wrapping_type;
+        // Note, T and Ts can't be (non-const) references, and parameters
+        // should be moved to allow for move-only constructor argument
+        // types.
+        naming::gid_type id = create<wrapping_type>(std::move(v), std::move(vs)...);
 
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return naming::invalid_gid;
-        }
-
-        if (!(*it).second.first) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (map entry is nullptr)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return naming::invalid_gid;
-        }
-
-        naming::gid_type id;
-        std::shared_ptr<component_factory_base> factory((*it).second.first);
-        {
-            util::unlock_guard<std::unique_lock<component_map_mutex_type> > ul(l);
-
-            typedef typename Component::wrapping_type wrapping_type;
-
-            // Note, T and Ts can't be (non-const) references, and parameters
-            // should be moved to allow for move-only constructor argument
-            // types.
-            id = factory->create_with_args(
-                    detail::construct_function<wrapping_type>(
-                        std::move(v), std::move(vs)...));
-        }
         LRT_(info) << "successfully created component " << id
-            << " of type: " << components::get_component_type_name(type);
+        << " of type: " << components::get_component_type_name(type);
 
         return id;
     }
@@ -577,47 +424,16 @@ namespace hpx { namespace components { namespace server
             components::get_component_type<
                 typename Component::wrapped_type>();
 
-        std::unique_lock<component_map_mutex_type> l(cm_mtx_);
-        component_map_type::const_iterator it = components_.find(type);
-        if (it == components_.end()) {
-            std::ostringstream strm;
-            strm << "attempt to create component(s) instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (component type not found in map)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return std::vector<naming::gid_type>();
-        }
-
-        if (!(*it).second.first) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance(s) of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (map entry is nullptr)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return std::vector<naming::gid_type>();
-        }
 
         std::vector<naming::gid_type> ids;
         ids.reserve(count);
 
-        std::shared_ptr<component_factory_base> factory((*it).second.first);
+        typedef typename Component::wrapping_type wrapping_type;
+        for (std::size_t i = 0; i != count; ++i)
         {
-            util::unlock_guard<std::unique_lock<component_map_mutex_type> > ul(l);
-            for (std::size_t i = 0; i != count; ++i)
-            {
-                ids.push_back(factory->create());
-            }
+            ids.push_back(create<wrapping_type>());
         }
+
         LRT_(info) << "successfully created " << count //-V128
                    << " component(s) of type: "
                    << components::get_component_type_name(type);
@@ -633,56 +449,15 @@ namespace hpx { namespace components { namespace server
             components::get_component_type<
                 typename Component::wrapped_type>();
 
-        std::unique_lock<component_map_mutex_type> l(cm_mtx_);
-        component_map_type::const_iterator it = components_.find(type);
-        if (it == components_.end()) {
-            std::ostringstream strm;
-            strm << "attempt to create component(s) instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (component type not found in map)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return std::vector<naming::gid_type>();
-        }
-
-        if (!(*it).second.first) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance(s) of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (map entry is nullptr)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::create_component",
-                strm.str());
-            return std::vector<naming::gid_type>();
-        }
-
         std::vector<naming::gid_type> ids;
         ids.reserve(count);
 
-        std::shared_ptr<component_factory_base> factory((*it).second.first);
+        typedef typename Component::wrapping_type wrapping_type;
+        for (std::size_t i = 0; i != count; ++i)
         {
-            util::unlock_guard<std::unique_lock<component_map_mutex_type> > ul(l);
-            for (std::size_t i = 0; i != count; ++i)
-            {
-                typedef typename Component::wrapping_type wrapping_type;
-
-                // Note, T and Ts can't be (non-const) references, and parameters
-                // should be moved to allow for move-only constructor argument
-                // types.
-                ids.push_back(
-                    factory->create_with_args(
-                        detail::construct_function<wrapping_type>(v, vs...)
-                    )
-                );
-            }
+            ids.push_back(create<wrapping_type>(v, vs...));
         }
+
         LRT_(info) << "successfully created " << count //-V128
                    << " component(s) of type: "
                    << components::get_component_type_name(type);
@@ -698,51 +473,16 @@ namespace hpx { namespace components { namespace server
             components::get_component_type<
                 typename Component::wrapped_type>();
 
-        std::unique_lock<component_map_mutex_type> l(cm_mtx_);
-        component_map_type::const_iterator it = components_.find(type);
-        if (it == components_.end()) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (component type not found in map)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::copy_create_component",
-                strm.str());
-            return naming::invalid_gid;
-        }
-
-        if (!(*it).second.first) {
-            std::ostringstream strm;
-            strm << "attempt to create component instance of "
-                << "invalid/unknown type: "
-                << components::get_component_type_name(type)
-                << " (map entry is nullptr)";
-
-            l.unlock();
-            HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                "runtime_support::copy_create_component",
-                strm.str());
-            return naming::invalid_gid;
-        }
-
+        typedef typename Component::wrapping_type wrapping_type;
         naming::gid_type id;
-        std::shared_ptr<component_factory_base> factory((*it).second.first);
-        {
-            util::unlock_guard<std::unique_lock<component_map_mutex_type> > ul(l);
 
-            typedef typename Component::wrapping_type wrapping_type;
-            if (!local_op) {
-                id = factory->create_with_args(
-                    detail::construct_function<wrapping_type>(std::move(*p)));
-            }
-            else {
-                id = factory->create_with_args(
-                    detail::construct_function<wrapping_type>(*p));
-            }
+        if (!local_op) {
+            id = create<wrapping_type>(std::move(*p));
         }
+        else {
+            id = create<wrapping_type>(*p);
+        }
+
         LRT_(info) << "successfully created component " << id
             << " of type: " << components::get_component_type_name(type);
 
@@ -758,52 +498,15 @@ namespace hpx { namespace components { namespace server
             components::get_component_type<
                 typename Component::wrapped_type>();
 
-        std::shared_ptr<component_factory_base> factory;
-        naming::gid_type migrated_id;
-
-        {
-            std::unique_lock<component_map_mutex_type> l(cm_mtx_);
-            component_map_type::const_iterator it = components_.find(type);
-            if (it == components_.end()) {
-                std::ostringstream strm;
-                strm << "attempt to migrate component instance of "
-                    << "invalid/unknown type: "
-                    << components::get_component_type_name(type)
-                    << " (component type not found in map)";
-
-                l.unlock();
-                HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                    "runtime_support::migrate_component_to_here",
-                    strm.str());
-                return naming::invalid_gid;
-            }
-
-            if (!(*it).second.first) {
-                std::ostringstream strm;
-                strm << "attempt to migrate component instance of "
-                    << "invalid/unknown type: "
-                    << components::get_component_type_name(type)
-                    << " (map entry is nullptr)";
-
-                l.unlock();
-                HPX_THROW_EXCEPTION(hpx::bad_component_type,
-                    "runtime_support::migrate_component_to_here",
-                    strm.str());
-                return naming::invalid_gid;
-            }
-
-            // create a local instance by copying the bits and remapping the id in
-            // AGAS
-            migrated_id = to_migrate.get_gid();
-            factory = (*it).second.first;
-        }
+        // create a local instance by copying the bits and remapping the id in
+        // AGAS
+        naming::gid_type migrated_id = to_migrate.get_gid();
 
         typedef typename Component::wrapping_type wrapping_type;
         typename wrapping_type::derived_type* new_instance = nullptr;
 
-        naming::gid_type id = factory->create_with_args(migrated_id,
-            detail::construct_function<wrapping_type>(std::move(*p)),
-            reinterpret_cast<void**>(&new_instance));
+        naming::gid_type id = create_migrated<wrapping_type>(migrated_id,
+            reinterpret_cast<void**>(&new_instance), std::move(*p));
 
         // sanity checks
         if (!id || new_instance == nullptr)
@@ -861,12 +564,6 @@ HPX_ACTION_USES_MEDIUM_STACK(
     hpx::components::server::runtime_support::dijkstra_termination_action)
 
 HPX_REGISTER_ACTION_DECLARATION(
-    hpx::components::server::runtime_support::bulk_create_components_action,
-    bulk_create_components_action)
-HPX_REGISTER_ACTION_DECLARATION(
-    hpx::components::server::runtime_support::create_memory_block_action,
-    create_memory_block_action)
-HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::load_components_action,
     load_components_action)
 HPX_REGISTER_ACTION_DECLARATION(
@@ -875,9 +572,6 @@ HPX_REGISTER_ACTION_DECLARATION(
 HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::call_shutdown_functions_action,
     call_shutdown_functions_action)
-HPX_REGISTER_ACTION_DECLARATION(
-    hpx::components::server::runtime_support::free_component_action,
-    free_component_action)
 HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::shutdown_action,
     shutdown_action)
@@ -894,17 +588,11 @@ HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::get_config_action,
     get_config_action)
 HPX_REGISTER_ACTION_DECLARATION(
-    hpx::components::server::runtime_support::update_agas_cache_entry_action,
-    update_agas_cache_entry_action)
-HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::garbage_collect_action,
     garbage_collect_action)
 HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::create_performance_counter_action,
     create_performance_counter_action)
-HPX_REGISTER_ACTION_DECLARATION(
-    hpx::components::server::runtime_support::get_instance_count_action,
-    get_instance_count_action)
 HPX_REGISTER_ACTION_DECLARATION(
     hpx::components::server::runtime_support::remove_from_connection_cache_action,
     remove_from_connection_cache_action)
@@ -1002,6 +690,7 @@ namespace hpx { namespace traits
 {
     ///////////////////////////////////////////////////////////////////////////
     // Termination detection does not make this locality black
+#if !defined(HPX_COMPUTE_DEVICE_CODE)
     template <>
     struct action_does_termination_detection<
         hpx::components::server::runtime_support::dijkstra_termination_action>
@@ -1011,6 +700,7 @@ namespace hpx { namespace traits
             return true;
         }
     };
+#endif
 
     // runtime_support is a (hand-rolled) component
     template <>

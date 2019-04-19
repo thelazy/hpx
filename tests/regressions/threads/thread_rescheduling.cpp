@@ -131,22 +131,20 @@ void tree_boot(
     detail::wait(promises);
 }
 
+bool woken = false;
+
 ///////////////////////////////////////////////////////////////////////////////
 void test_dummy_thread(
     std::uint64_t
     )
 {
-    bool woken = false;
-
     while (true)
     {
         thread_state_ex_enum statex = suspend(suspended);
 
-        woken = true;
-
         if (statex == wait_terminate)
         {
-            HPX_TEST(woken);
+            woken = true;
             return;
         }
     }
@@ -160,7 +158,7 @@ int hpx_main(variables_map& vm)
 
     {
         thread_id_type thread_id = register_thread_nullary(
-            hpx::util::bind(&test_dummy_thread, futures));
+            hpx::util::deferred_call(&test_dummy_thread, futures));
         HPX_TEST(thread_id != hpx::threads::invalid_thread_id);
 
         // Flood the queues with suspension operations before the rescheduling
@@ -202,6 +200,8 @@ int main(int argc, char* argv[])
 
     // Initialize and run HPX
     HPX_TEST_EQ(0, init(cmdline, argc, argv));
+
+    HPX_TEST(woken);
 
     return hpx::util::report_errors();
 }

@@ -8,11 +8,10 @@
 
 #include <hpx/config/defaults.hpp>
 // TODO: move parcel ports into plugins
+#include <hpx/pp/expand.hpp>
+#include <hpx/pp/stringize.hpp>
 #include <hpx/runtime/parcelset/parcelhandler.hpp>
 #include <hpx/util/assert.hpp>
-#include <hpx/util/detail/pp/expand.hpp>
-#include <hpx/util/detail/pp/stringize.hpp>
-#include <hpx/util/filesystem_compatibility.hpp>
 #include <hpx/util/find_prefix.hpp>
 #include <hpx/util/init_ini_data.hpp>
 #include <hpx/util/itt_notify.hpp>
@@ -21,12 +20,13 @@
 #include <hpx/util/safe_lexical_cast.hpp>
 #include <hpx/version.hpp>
 
-#include <boost/detail/endian.hpp>
-#include <boost/spirit/include/qi_parse.hpp>
-#include <boost/spirit/include/qi_string.hpp>
-#include <boost/spirit/include/qi_numeric.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/predef/other/endian.h>
 #include <boost/spirit/include/qi_alternative.hpp>
+#include <boost/spirit/include/qi_numeric.hpp>
+#include <boost/spirit/include/qi_parse.hpp>
 #include <boost/spirit/include/qi_sequence.hpp>
+#include <boost/spirit/include/qi_string.hpp>
 #include <boost/tokenizer.hpp>
 
 #include <algorithm>
@@ -93,9 +93,9 @@ namespace hpx { namespace threads { namespace policies
 #endif
 }}}
 
-namespace hpx { namespace lcos { namespace local
-{
 #ifdef HPX_HAVE_SPINLOCK_DEADLOCK_DETECTION
+namespace hpx { namespace util { namespace detail
+{
     ///////////////////////////////////////////////////////////////////////////
     // We globally control whether to do minimal deadlock detection in
     // spin-locks using this global bool variable. It will be set once by the
@@ -103,8 +103,8 @@ namespace hpx { namespace lcos { namespace local
     bool spinlock_break_on_deadlock = false;
     std::size_t spinlock_deadlock_detection_limit =
         HPX_SPINLOCK_DEADLOCK_DETECTION_LIMIT;
-#endif
 }}}
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx { namespace util
@@ -131,7 +131,8 @@ namespace hpx { namespace util
             // create default installation location and logging settings
             "[hpx]",
             "location = ${HPX_LOCATION:$[system.prefix]}",
-            "component_path = $[hpx.location]"
+            "component_paths = ${HPX_COMPONENT_PATHS}",
+            "component_base_paths = $[hpx.location]" // NOLINT
                 HPX_INI_PATH_DELIMITER "$[system.executable_prefix]",
             "component_path_suffixes = /lib/hpx" HPX_INI_PATH_DELIMITER
                                       "/bin/hpx",
@@ -178,13 +179,13 @@ namespace hpx { namespace util
             "expect_connecting_localities = ${HPX_EXPECT_CONNECTING_LOCALITIES:0}",
 
             // add placeholders for keys to be added by command line handling
-            "os_threads = all",
+            "os_threads = cores",
             "cores = all",
             "localities = 1",
             "first_pu = 0",
             "runtime_mode = console",
             "scheduler = local-priority-fifo",
-            "affinity = pu",
+            "affinity = core",
             "pu_step = 1",
             "pu_offset = 0",
             "numa_sensitive = 0",
@@ -195,6 +196,10 @@ namespace hpx { namespace util
                 HPX_PP_STRINGIZE(HPX_PP_EXPAND(HPX_IDLE_LOOP_COUNT_MAX)) "}",
             "max_busy_loop_count = ${HPX_MAX_BUSY_LOOP_COUNT:"
                 HPX_PP_STRINGIZE(HPX_PP_EXPAND(HPX_BUSY_LOOP_COUNT_MAX)) "}",
+#if defined(HPX_HAVE_THREAD_MANAGER_IDLE_BACKOFF)
+            "max_idle_backoff_time = ${HPX_MAX_IDLE_BACKOFF_TIME:"
+            HPX_PP_STRINGIZE(HPX_PP_EXPAND(HPX_IDLE_BACKOFF_TIME_MAX)) "}",
+#endif
 
             /// If HPX_HAVE_ATTACH_DEBUGGER_ON_TEST_FAILURE is set,
             /// then apply the test-failure value as default.
@@ -233,12 +238,18 @@ namespace hpx { namespace util
 #endif
 
             "[hpx.threadpools]",
+#if defined(HPX_HAVE_IO_POOL)
             "io_pool_size = ${HPX_NUM_IO_POOL_SIZE:"
                 HPX_PP_STRINGIZE(HPX_PP_EXPAND(HPX_NUM_IO_POOL_SIZE)) "}",
+#endif
+#if defined(HPX_HAVE_NETWORKING)
             "parcel_pool_size = ${HPX_NUM_PARCEL_POOL_SIZE:"
                 HPX_PP_STRINGIZE(HPX_PP_EXPAND(HPX_NUM_PARCEL_POOL_SIZE)) "}",
+#endif
+#if defined(HPX_HAVE_TIMER_POOL)
             "timer_pool_size = ${HPX_NUM_TIMER_POOL_SIZE:"
                 HPX_PP_STRINGIZE(HPX_PP_EXPAND(HPX_NUM_TIMER_POOL_SIZE)) "}",
+#endif
 
             "[hpx.thread_queue]",
             "min_tasks_to_steal_pending = "
@@ -257,6 +268,10 @@ namespace hpx { namespace util
 
             // allow for unknown options to be passed through
             "allow_unknown = ${HPX_COMMANDLINE_ALLOW_UNKNOWN:0}",
+
+            // allow for command line options to to be passed through the
+            // environment
+            "prepend_options = ${HPX_COMMANDLINE_OPTIONS}",
 
             // predefine command line aliases
             "[hpx.commandline.aliases]",
@@ -335,7 +350,7 @@ namespace hpx { namespace util
         lines.insert(lines.end(), lines_pp.begin(), lines_pp.end());
 
         // don't overload user overrides
-        this->parse("<static defaults>", lines, false, false);
+        this->parse("<static defaults>", lines, false, false, false);
 
         need_to_call_pre_initialize = false;
     }
@@ -361,9 +376,14 @@ namespace hpx { namespace util
     void runtime_configuration::load_components_static(std::vector<
         components::static_factory_load_data_type> const& static_modules)
     {
+        std::vector<std::shared_ptr<components::component_registry_base>> registries;
         for (components::static_factory_load_data_type const& d : static_modules)
         {
-            util::load_component_factory_static(*this, d.name, d.get_factory);
+            auto new_registries =
+                util::load_component_factory_static(*this, d.name, d.get_factory);
+            registries.reserve(registries.size() + new_registries.size());
+            std::copy(new_registries.begin(), new_registries.end(),
+                std::back_inserter(registries));
         }
 
         // read system and user ini files _again_, to allow the user to
@@ -381,6 +401,98 @@ namespace hpx { namespace util
 
         // invoke last reconfigure
         reconfigure();
+        for (auto& registry: registries)
+        {
+            registry->register_component_type();
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // collect all directories where to use for the search for plugins
+    void runtime_configuration::load_component_path(
+        std::vector<std::shared_ptr<plugins::plugin_registry_base>>&
+            plugin_registries,
+        std::string const& path,
+        std::set<std::string>& component_paths,
+        std::map<std::string, boost::filesystem::path>& basenames)
+    {
+        namespace fs = boost::filesystem;
+
+        using plugin_list_type =
+            std::vector<std::shared_ptr<plugins::plugin_registry_base>>;
+
+        if (!path.empty())
+        {
+            fs::path this_p(path);
+            boost::system::error_code fsec;
+            fs::path canonical_p =
+                fs::canonical(this_p, fs::initial_path(), fsec);
+            if (fsec)
+                canonical_p = this_p;
+
+            std::pair<std::set<std::string>::iterator, bool> p =
+                component_paths.insert(canonical_p.string());
+
+            if (p.second)
+            {
+                // have all path elements, now find ini files in there...
+                fs::path this_path (*p.first);
+                if (fs::exists(this_path, fsec) && !fsec)
+                {
+                    plugin_list_type tmp_regs =
+                        util::init_ini_data_default(this_path.string(),
+                            *this, basenames, modules_);
+
+                    std::copy(tmp_regs.begin(), tmp_regs.end(),
+                        std::back_inserter(plugin_registries));
+                }
+            }
+        }
+    }
+
+    void runtime_configuration::load_component_paths(
+        std::vector<std::shared_ptr<plugins::plugin_registry_base>>&
+            plugin_registries,
+        std::string const& component_base_paths,
+        std::string const& component_path_suffixes,
+        std::set<std::string>& component_paths,
+        std::map<std::string, boost::filesystem::path>& basenames)
+    {
+        namespace fs = boost::filesystem;
+
+        // try to build default ini structure from shared libraries in default
+        // installation location, this allows to install simple components
+        // without the need to install an ini file
+        // split of the separate paths from the given path list
+        typedef boost::tokenizer<boost::char_separator<char> > tokenizer_type;
+
+        boost::char_separator<char> sep (HPX_INI_PATH_DELIMITER);
+        tokenizer_type tok_path(component_base_paths, sep);
+        tokenizer_type tok_suffixes(component_path_suffixes, sep);
+        tokenizer_type::iterator end_path = tok_path.end();
+        tokenizer_type::iterator end_suffixes = tok_suffixes.end();
+
+        for (tokenizer_type::iterator it = tok_path.begin(); it != end_path;
+             ++it)
+        {
+            std::string const& path = *it;
+            if (tok_suffixes.begin() != tok_suffixes.end())
+            {
+                for (tokenizer_type::iterator jt = tok_suffixes.begin();
+                    jt != end_suffixes; ++jt)
+                {
+                    std::string p = path;
+                    p += *jt;
+                    load_component_path(
+                        plugin_registries, p, component_paths, basenames);
+                }
+            }
+            else
+            {
+                load_component_path(
+                    plugin_registries, path, component_paths, basenames);
+            }
+        }
     }
 
     // load information about dynamically discovered plugins
@@ -390,68 +502,28 @@ namespace hpx { namespace util
         typedef std::vector<std::shared_ptr<plugins::plugin_registry_base> >
             plugin_list_type;
 
-        namespace fs = boost::filesystem;
-
-        // try to build default ini structure from shared libraries in default
-        // installation location, this allows to install simple components
-        // without the need to install an ini file
-        // split of the separate paths from the given path list
-        typedef boost::tokenizer<boost::char_separator<char> > tokenizer_type;
-
-        std::string component_path(
-            get_entry("hpx.component_path", HPX_DEFAULT_COMPONENT_PATH));
-
-        std::string component_path_suffixes(
-            get_entry("hpx.component_path_suffixes", "/lib/hpx"));
-
         // protect against duplicate paths
         std::set<std::string> component_paths;
 
         // list of base names avoiding to load a module more than once
-        std::map<std::string, fs::path> basenames;
+        std::map<std::string, boost::filesystem::path> basenames;
 
-        boost::char_separator<char> sep (HPX_INI_PATH_DELIMITER);
-        tokenizer_type tok_path(component_path, sep);
-        tokenizer_type tok_suffixes(component_path_suffixes, sep);
-        tokenizer_type::iterator end_path = tok_path.end();
-        tokenizer_type::iterator end_suffixes = tok_suffixes.end();
+        // plugin registry object
         plugin_list_type plugin_registries;
 
-        for (tokenizer_type::iterator it = tok_path.begin(); it != end_path; ++it)
-        {
-            std::string p = *it;
-            for(tokenizer_type::iterator jt = tok_suffixes.begin();
-                jt != end_suffixes; ++jt)
-            {
-                std::string path(p);
-                path += *jt;
+        // load plugin paths from component_base_paths and suffixes
+        std::string component_base_paths(
+            get_entry("hpx.component_base_paths", HPX_DEFAULT_COMPONENT_PATH));
+        std::string component_path_suffixes(
+            get_entry("hpx.component_path_suffixes", "/lib/hpx"));
 
-                if (!path.empty()) {
-                    fs::path this_p(path);
-                    boost::system::error_code fsec;
-                    fs::path canonical_p = util::canonical_path(this_p, fsec);
-                    if (fsec)
-                        canonical_p = this_p;
+        load_component_paths(plugin_registries, component_base_paths,
+            component_path_suffixes, component_paths, basenames);
 
-                    std::pair<std::set<std::string>::iterator, bool> p =
-                        component_paths.insert(
-                            util::native_file_string(canonical_p));
-
-                    if (p.second) {
-                        // have all path elements, now find ini files in there...
-                        fs::path this_path (hpx::util::create_path(*p.first));
-                        if (fs::exists(this_path, fsec) && !fsec) {
-                            plugin_list_type tmp_regs =
-                                util::init_ini_data_default(
-                                    this_path.string(), *this, basenames, modules_);
-
-                            std::copy(tmp_regs.begin(), tmp_regs.end(),
-                                std::back_inserter(plugin_registries));
-                        }
-                    }
-                }
-            }
-        }
+        // load additional explicit plugin paths from plugin_paths key
+        std::string plugin_paths(get_entry("hpx.component_paths", ""));
+        load_component_paths(
+            plugin_registries, plugin_paths, "", component_paths, basenames);
 
         // read system and user ini files _again_, to allow the user to
         // overwrite the settings from the default component ini's.
@@ -516,9 +588,9 @@ namespace hpx { namespace util
             enable_minimal_deadlock_detection();
 #endif
 #ifdef HPX_HAVE_SPINLOCK_DEADLOCK_DETECTION
-        lcos::local::spinlock_break_on_deadlock =
+        util::detail::spinlock_break_on_deadlock =
             enable_spinlock_deadlock_detection();
-        lcos::local::spinlock_deadlock_detection_limit =
+        util::detail::spinlock_deadlock_detection_limit =
             get_spinlock_deadlock_detection_limit();
 #endif
     }
@@ -577,9 +649,9 @@ namespace hpx { namespace util
             enable_minimal_deadlock_detection();
 #endif
 #ifdef HPX_HAVE_SPINLOCK_DEADLOCK_DETECTION
-        lcos::local::spinlock_break_on_deadlock =
+        util::detail::spinlock_break_on_deadlock =
             enable_spinlock_deadlock_detection();
-        lcos::local::spinlock_deadlock_detection_limit =
+        util::detail::spinlock_deadlock_detection_limit =
             get_spinlock_deadlock_detection_limit();
 #endif
     }
@@ -653,6 +725,49 @@ namespace hpx { namespace util
                     std::to_string(num_localities));
             }
         }
+    }
+
+    // this function should figure out whether networking has to be enabled.
+    bool runtime_configuration::enable_networking() const
+    {
+#if defined(HPX_HAVE_NETWORKING)
+        if (has_section("hpx"))
+        {
+            util::section const* sec = get_section("hpx");
+            if (nullptr != sec)
+            {
+                // get the number of initial localities
+                if (hpx::util::get_entry_as<std::uint32_t>(
+                      *sec, "localities", 1) > 1)
+                {
+                    return true;
+                }
+
+                // on localities other than locality zero the number of
+                // localities might not have been initialized yet
+                if (hpx::util::get_entry_as<std::int32_t>(*sec, "node", -1) > 0)
+                {
+                    return true;
+                }
+
+                // get whether localities are expected to connect
+                if (hpx::util::get_entry_as<std::int32_t>(
+                        *sec, "expect_connecting_localities", 0) != 0)
+                {
+                    return true;
+                }
+
+                // for any runtime mode except 'console' networking should be
+                // enabled as well
+                if (hpx::util::get_entry_as<std::string>(
+                        *sec, "runtime_mode", "") != "console")
+                {
+                    return true;
+                }
+            }
+        }
+#endif
+        return false;
     }
 
     std::uint32_t runtime_configuration::get_first_used_core() const
@@ -893,14 +1008,14 @@ namespace hpx { namespace util
         if (has_section("hpx.parcel")) {
             util::section const* sec = get_section("hpx.parcel");
             if (nullptr != sec) {
-#ifdef BOOST_BIG_ENDIAN
+#if BOOST_ENDIAN_BIG_BYTE
                 return sec->get_entry("endian_out", "big");
 #else
                 return sec->get_entry("endian_out", "little");
 #endif
             }
         }
-#ifdef BOOST_BIG_ENDIAN
+#if BOOST_ENDIAN_BIG_BYTE
         return "big";
 #else
         return "little";

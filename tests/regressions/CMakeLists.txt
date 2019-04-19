@@ -37,12 +37,14 @@ set(tests
     id_type_ref_counting_1032
     multiple_init
     multiple_init_2918
+    options_as_config_3339
     unhandled_exception_582
    )
 
 set(commandline_options_1437_PARAMETERS THREADS_PER_LOCALITY 2)
 set(id_type_ref_counting_1032_PARAMETERS THREADS_PER_LOCALITY 1)
 set(unhandled_exception_582_PARAMETERS THREADS_PER_LOCALITY 1)
+set(dynamic_counters_loaded_1508_FLAGS DEPENDENCIES memory_component)
 
 foreach(test ${tests})
   set(sources
@@ -69,7 +71,7 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.regressions.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()
 
 add_hpx_test(

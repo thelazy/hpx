@@ -33,8 +33,12 @@
 #include <hpx/runtime/threads/coroutines/detail/coroutine_accessor.hpp>
 #include <hpx/runtime/threads/coroutines/detail/coroutine_impl.hpp>
 #include <hpx/runtime/threads/thread_enums.hpp>
+#include <hpx/runtime/threads/thread_id_type.hpp>
 #include <hpx/util/assert.hpp>
 #include <hpx/util/function.hpp>
+#if defined(HPX_HAVE_APEX)
+#include <hpx/util/apex.hpp>
+#endif
 
 #include <cstddef>
 #include <exception>
@@ -71,7 +75,7 @@ namespace hpx { namespace threads { namespace coroutines { namespace detail
 
         typedef coroutine_impl impl_type;
         typedef impl_type* impl_ptr; // Note, no reference counting here.
-        typedef impl_type::thread_id_repr_type thread_id_repr_type;
+        typedef impl_type::thread_id_type thread_id_type;
 
         typedef impl_type::result_type result_type;
         typedef impl_type::arg_type arg_type;
@@ -90,7 +94,7 @@ namespace hpx { namespace threads { namespace coroutines { namespace detail
         {
             HPX_ASSERT(m_pimpl);
 
-            this->m_pimpl->bind_result(&arg);
+            this->m_pimpl->bind_result(arg);
 
             {
                 reset_self_on_exit on_exit(this);
@@ -128,19 +132,7 @@ namespace hpx { namespace threads { namespace coroutines { namespace detail
             return tmp;
         }
 
-        HPX_NORETURN void exit()
-        {
-            m_pimpl->exit_self();
-            std::terminate(); // FIXME: replace with hpx::terminate();
-        }
-
-        bool pending() const
-        {
-            HPX_ASSERT(m_pimpl);
-            return m_pimpl->pending() != 0;
-        }
-
-        thread_id_repr_type get_thread_id() const
+        thread_id_type get_thread_id() const
         {
             HPX_ASSERT(m_pimpl);
             return m_pimpl->get_thread_id();
@@ -202,16 +194,27 @@ namespace hpx { namespace threads { namespace coroutines { namespace detail
         }
 
     public:
-        static HPX_EXPORT void set_self(coroutine_self* self);
-        static HPX_EXPORT coroutine_self* get_self();
-        static HPX_EXPORT void init_self();
-        static HPX_EXPORT void reset_self();
+        static HPX_EXPORT coroutine_self*& local_self();
+
+        static void set_self(coroutine_self* self)
+        {
+            local_self() = self;
+        }
+        static coroutine_self* get_self()
+        {
+            return local_self();
+        }
 
 #if defined(HPX_HAVE_APEX)
-        void** get_apex_data() const
+        apex_task_wrapper get_apex_data(void) const
         {
             HPX_ASSERT(m_pimpl);
             return m_pimpl->get_apex_data();
+        }
+        void set_apex_data(apex_task_wrapper data)
+        {
+            HPX_ASSERT(m_pimpl);
+            m_pimpl->set_apex_data(data);
         }
 #endif
 

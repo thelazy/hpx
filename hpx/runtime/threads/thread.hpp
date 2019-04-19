@@ -8,18 +8,19 @@
 
 #include <hpx/config.hpp>
 #include <hpx/exception_fwd.hpp>
-#include <hpx/runtime_fwd.hpp>
 #include <hpx/lcos/local/spinlock.hpp>
 #include <hpx/lcos_fwd.hpp>
 #include <hpx/runtime/threads/thread_data_fwd.hpp>
-#include <hpx/util_fwd.hpp>
+#include <hpx/runtime_fwd.hpp>
 #include <hpx/util/deferred_call.hpp>
 #include <hpx/util/steady_clock.hpp>
+#include <hpx/util_fwd.hpp>
 
 #include <cstddef>
 #include <iosfwd>
 #include <mutex>
 #include <utility>
+#include <type_traits>
 
 #include <hpx/config/warnings_prefix.hpp>
 
@@ -38,9 +39,10 @@ namespace hpx
 
         thread() noexcept;
 
-        template <typename F>
+        template <typename F, typename Enable = typename
+            std::enable_if<!std::is_same<typename hpx::util::decay<F>::type,
+                thread>::value>::type>
         explicit thread(F&& f)
-          : id_(threads::invalid_thread_id)
         {
             start_thread(util::deferred_call(std::forward<F>(f)));
         }
@@ -148,7 +150,7 @@ namespace hpx
 
     inline bool operator== (thread::id const& x, thread::id const& y) noexcept
     {
-        return x.id_.get() == y.id_.get();
+        return x.id_ == y.id_;
     }
 
     inline bool operator!= (thread::id const& x, thread::id const& y) noexcept
@@ -158,22 +160,22 @@ namespace hpx
 
     inline bool operator< (thread::id const& x, thread::id const& y) noexcept
     {
-        return x.id_.get() < y.id_.get();
+        return x.id_ < y.id_;
     }
 
     inline bool operator> (thread::id const& x, thread::id const& y) noexcept
     {
-        return x.id_.get() > y.id_.get();
+        return y < x;
     }
 
     inline bool operator<= (thread::id const& x, thread::id const& y) noexcept
     {
-        return !(x.id_.get() > y.id_.get());
+        return !(x > y);
     }
 
     inline bool operator>= (thread::id const& x, thread::id const& y) noexcept
     {
-        return !(x.id_.get() < y.id_.get());
+        return !(x < y);
     }
 
     template <typename Char, typename Traits>

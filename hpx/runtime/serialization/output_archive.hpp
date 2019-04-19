@@ -22,6 +22,7 @@
 #if defined(BOOST_HAS_INT128) && !defined(__NVCC__) && !defined(__CUDACC__)
 #include <boost/cstdint.hpp>
 #endif
+#include <boost/predef/other/endian.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -125,6 +126,7 @@ namespace hpx { namespace serialization
           , buffer_(detail::create_output_container(buffer, chunks, filter,
                 typename traits::serialization_access_data<Container>::
                     preprocessing_only()))
+          , split_gids_(nullptr)
         {
             // endianness needs to be saves separately as it is needed to
             // properly interpret the flags
@@ -340,7 +342,7 @@ namespace hpx { namespace serialization
         {
             const std::size_t size = sizeof(Promoted);
             char* cptr = reinterpret_cast<char *>(&l); //-V206
-#ifdef BOOST_BIG_ENDIAN
+#if BOOST_ENDIAN_BIG_BYTE
             if(endian_little())
                 reverse_bytes(size, cptr);
 #else

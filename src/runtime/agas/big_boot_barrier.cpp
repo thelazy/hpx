@@ -10,33 +10,35 @@
 #include <hpx/config.hpp>
 #include <hpx/compat/mutex.hpp>
 #include <hpx/runtime.hpp>
-#include <hpx/runtime/actions/plain_action.hpp>
-#include <hpx/runtime/components/server/managed_component_base.hpp>
-#include <hpx/util/assert.hpp>
-#include <hpx/util/bind.hpp>
-#include <hpx/util/format.hpp>
-#include <hpx/util/reinitializable_static.hpp>
-#include <hpx/util/safe_lexical_cast.hpp>
-#include <hpx/util/high_resolution_clock.hpp>
-#include <hpx/util/runtime_configuration.hpp>
 #include <hpx/runtime/actions/action_support.hpp>
-#include <hpx/runtime/parcelset/parcel.hpp>
-#include <hpx/runtime/parcelset/parcelport.hpp>
-#include <hpx/runtime/naming/resolver_client.hpp>
-#include <hpx/runtime/agas/interface.hpp>
+#include <hpx/runtime/actions/plain_action.hpp>
 #include <hpx/runtime/agas/addressing_service.hpp>
 #include <hpx/runtime/agas/big_boot_barrier.hpp>
-#include <hpx/runtime/agas/symbol_namespace.hpp>
-#include <hpx/runtime/agas/server/locality_namespace.hpp>
-#include <hpx/runtime/agas/server/component_namespace.hpp>
-#include <hpx/runtime/agas/server/symbol_namespace.hpp>
-#include <hpx/runtime/agas/server/primary_namespace.hpp>
 #include <hpx/runtime/agas/detail/hosted_component_namespace.hpp>
 #include <hpx/runtime/agas/detail/hosted_locality_namespace.hpp>
-#include <hpx/runtime/threads/topology.hpp>
-#include <hpx/runtime/threads/policies/topology.hpp>
+#include <hpx/runtime/agas/interface.hpp>
+#include <hpx/runtime/agas/server/component_namespace.hpp>
+#include <hpx/runtime/agas/server/locality_namespace.hpp>
+#include <hpx/runtime/agas/server/primary_namespace.hpp>
+#include <hpx/runtime/agas/server/symbol_namespace.hpp>
+#include <hpx/runtime/agas/symbol_namespace.hpp>
+#include <hpx/runtime/components/server/managed_component_base.hpp>
+#include <hpx/runtime/naming/resolver_client.hpp>
+#include <hpx/runtime/parcelset/detail/parcel_await.hpp>
+#include <hpx/runtime/parcelset/parcel.hpp>
+#include <hpx/runtime/parcelset/parcelport.hpp>
+#include <hpx/runtime/parcelset/put_parcel.hpp>
 #include <hpx/runtime/serialization/detail/polymorphic_id_factory.hpp>
 #include <hpx/runtime/serialization/vector.hpp>
+#include <hpx/runtime/threads/topology.hpp>
+#include <hpx/util/assert.hpp>
+#include <hpx/util/bind_front.hpp>
+#include <hpx/util/detail/yield_k.hpp>
+#include <hpx/util/format.hpp>
+#include <hpx/util/high_resolution_clock.hpp>
+#include <hpx/util/reinitializable_static.hpp>
+#include <hpx/util/runtime_configuration.hpp>
+#include <hpx/util/safe_lexical_cast.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +48,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -222,6 +225,52 @@ namespace hpx { namespace agas { namespace detail
 
 namespace hpx { namespace agas
 {
+
+    template <typename Action, typename... Args>
+    void big_boot_barrier::apply(
+        std::uint32_t source_locality_id
+      , std::uint32_t target_locality_id
+      , parcelset::locality dest
+      , Action act
+      , Args &&... args)
+    { // {{{
+        HPX_ASSERT(pp);
+        naming::address addr(naming::get_gid_from_locality_id(target_locality_id));
+        parcelset::parcel p(
+            parcelset::detail::create_parcel::call(
+                naming::get_gid_from_locality_id(target_locality_id),
+                std::move(addr), act, std::forward<Args>(args)...));
+#if defined(HPX_HAVE_PARCEL_PROFILING)
+        if (!p.parcel_id())
+        {
+            p.parcel_id() = parcelset::parcel::generate_unique_id(source_locality_id);
+        }
+#endif
+
+        parcelset::detail::parcel_await_apply(std::move(p),
+            parcelset::write_handler_type(), 0,
+            [this, dest](parcelset::parcel&& p, parcelset::write_handler_type&&)
+            {
+                pp->send_early_parcel(dest, std::move(p));
+            });
+    } // }}}
+
+    template <typename Action, typename... Args>
+    void big_boot_barrier::apply_late(
+        std::uint32_t source_locality_id
+      , std::uint32_t target_locality_id
+      , parcelset::locality const & dest
+      , Action act
+      , Args &&... args)
+    { // {{{
+        naming::address addr(naming::get_gid_from_locality_id(target_locality_id));
+
+        parcelset::put_parcel(
+            naming::id_type(
+                naming::get_gid_from_locality_id(target_locality_id),
+                naming::id_type::unmanaged),
+            std::move(addr), act, std::forward<Args>(args)...);
+    } // }}}
 
 //typedef components::detail::heap_factory<
 //    lcos::detail::promise<
@@ -418,7 +467,7 @@ void register_worker(registration_header const& header)
         HPX_THROW_EXCEPTION(internal_server_error
             , "agas::register_worker"
             , hpx::util::format(
-                "worker node (%s) can't suggest locality_id zero, "
+                "worker node ({}) can't suggest locality_id zero, "
                 "this is reserved for the console",
                 header.endpoints));
         return;
@@ -429,7 +478,7 @@ void register_worker(registration_header const& header)
         HPX_THROW_EXCEPTION(internal_server_error
             , "agas::register_worker"
             , hpx::util::format(
-                "attempt to register locality %s more than once",
+                "attempt to register locality {} more than once",
                 header.endpoints));
         return;
     }
@@ -449,16 +498,16 @@ void register_worker(registration_header const& header)
 //     agas_client.bind_local(symbol_ns_gid, symbol_ns_address);
 
     naming::address locality_addr(hpx::get_locality(),
-        server::locality_namespace::get_component_type(),
+        hpx::components::component_agas_locality_namespace,
             agas_client.locality_ns_->ptr());
     naming::address primary_addr(hpx::get_locality(),
-        server::primary_namespace::get_component_type(),
+        hpx::components::component_agas_primary_namespace,
             agas_client.primary_ns_.ptr());
     naming::address component_addr(hpx::get_locality(),
-        server::component_namespace::get_component_type(),
+        hpx::components::component_agas_component_namespace,
             agas_client.component_ns_->ptr());
     naming::address symbol_addr(hpx::get_locality(),
-        server::symbol_namespace::get_component_type(),
+        hpx::components::component_agas_symbol_namespace,
             agas_client.symbol_ns_.ptr());
 
     // assign cores to the new locality
@@ -511,13 +560,13 @@ void register_worker(registration_header const& header)
         // delay the final response until the runtime system is up and running
         util::unique_function_nonser<void()>* thunk =
             new util::unique_function_nonser<void()>(
-                util::bind(
-                    util::one_shot(&big_boot_barrier::apply_notification)
-                  , std::ref(get_big_boot_barrier())
+                util::one_shot(util::bind_front(
+                    &big_boot_barrier::apply_notification
+                  , &get_big_boot_barrier()
                   , 0
                   , naming::get_locality_id_from_gid(prefix)
                   , dest
-                  , std::move(hdr)));
+                  , std::move(hdr))));
         get_big_boot_barrier().add_thunk(thunk);
     }
 }
@@ -550,7 +599,7 @@ void notify_worker(notification_header const& header)
     agas_client.set_local_locality(header.prefix);
     agas_client.register_console(header.agas_endpoints);
     cfg.parse("assigned locality",
-        hpx::util::format("hpx.locality!=%1%",
+        hpx::util::format("hpx.locality!={1}",
             naming::get_locality_id_from_gid(header.prefix)));
 
     // store the full addresses of the agas servers in our local service
@@ -742,9 +791,8 @@ void big_boot_barrier::wait_hosted(
         , unassigned
         , suggested_prefix);
 
-    std::srand(static_cast<unsigned>(util::high_resolution_clock::now()));
     apply(
-          static_cast<std::uint32_t>(std::rand()) // random first parcel id
+          static_cast<std::uint32_t>(std::random_device{}()) // random first parcel id
         , 0
         , bootstrap_agas
         , register_worker_action()
@@ -795,6 +843,18 @@ void big_boot_barrier::trigger()
             }
             delete p;
         }
+    }
+}
+
+void big_boot_barrier::add_thunk(util::unique_function_nonser<void()>* f)
+{
+    std::size_t k = 0;
+    while (!thunks.push(f))
+    {
+        // Wait until successfully pushed ...
+        hpx::util::detail::yield_k(
+            k, "hpx::agas::big_boot_barrier::add_thunk");
+        ++k;
     }
 }
 

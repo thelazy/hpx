@@ -6,7 +6,7 @@
 #ifndef HPX_DATAFLOW_HPP
 #define HPX_DATAFLOW_HPP
 
+#include <hpx/lcos/future.hpp>
 #include <hpx/lcos/dataflow.hpp>
-#include <hpx/lcos/local/dataflow.hpp>
 
 #endif /*HPX_DATAFLOW_HPP*/

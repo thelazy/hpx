@@ -12,7 +12,7 @@
 #include <hpx/runtime/serialization/serialize.hpp>
 #include <hpx/traits/is_executor_parameters.hpp>
 
-#include <hpx/parallel/executors/execution_parameters.hpp>
+#include <hpx/parallel/executors/execution_parameters_fwd.hpp>
 
 #include <cstddef>
 #include <type_traits>
@@ -96,18 +96,5 @@ namespace hpx { namespace parallel { namespace execution
     {};
     /// \endcond
 }}}
-
-#if defined(HPX_HAVE_EXECUTOR_COMPATIBILITY)
-
-#include <hpx/parallel/executors/v1/executor_parameter_traits.hpp>
-#include <hpx/parallel/executors/v1/thread_executor_parameter_traits.hpp>
-#include <hpx/traits/v1/is_executor_parameters.hpp>
-
-namespace hpx { namespace parallel { inline namespace v3
-{
-    using static_chunk_size = execution::static_chunk_size;
-}}}
-
-#endif
 
 #endif

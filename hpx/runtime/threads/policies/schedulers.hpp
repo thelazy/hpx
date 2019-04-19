@@ -18,13 +18,7 @@
 #if defined(HPX_HAVE_STATIC_PRIORITY_SCHEDULER)
 #include <hpx/runtime/threads/policies/static_priority_queue_scheduler.hpp>
 #endif
-#if defined(HPX_HAVE_HIERARCHY_SCHEDULER)
-#include <hpx/runtime/threads/policies/hierarchy_scheduler.hpp>
-#endif
-#if defined(HPX_HAVE_PERIODIC_PRIORITY_SCHEDULER)
-#include <hpx/runtime/threads/policies/periodic_priority_queue_scheduler.hpp>
-#endif
-#if defined(HPX_HAVE_THROTTLING_SCHEDULER) && defined(HPX_HAVE_HWLOC)
-#include <hpx/runtime/threads/policies/throttling_scheduler.hpp>
+#if defined(HPX_HAVE_SHARED_PRIORITY_SCHEDULER)
+#include <hpx/runtime/threads/policies/shared_priority_queue_scheduler.hpp>
 #endif
 #endif

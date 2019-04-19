@@ -8,6 +8,10 @@ set(tests
     any_of_range
     copy_range
     copyif_range
+    count_range
+    countif_range
+    find_end_range
+    find_first_of_range
     foreach_range
     foreach_range_projection
     generate_range
@@ -18,9 +22,12 @@ set(tests
     merge_range
     min_element_range
     minmax_element_range
+    move_range
     none_of_range
     partition_range
     partition_copy_range
+    remove_range
+    remove_if_range
     remove_copy_range
     remove_copy_if_range
     replace_range
@@ -31,6 +38,8 @@ set(tests
     reverse_copy_range
     rotate_range
     rotate_copy_range
+    search_range
+    searchn_range
     sort_range
     transform_range
     transform_range_binary
@@ -55,7 +64,7 @@ foreach(test ${tests})
                      HPX_PREFIX ${HPX_BUILD_PREFIX}
                      FOLDER "Tests/Unit/Parallel/ContainerAlgorithms")
 
-  add_hpx_unit_test("parallel" ${test} ${${test}_PARAMETERS})
+  add_hpx_unit_test("parallel.container_algorithms" ${test} ${${test}_PARAMETERS})
 
   # add a custom target for this example
   add_hpx_pseudo_target(tests.unit.parallel.container_algorithms.${test})
@@ -66,5 +75,5 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.unit.parallel.container_algorithms.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()

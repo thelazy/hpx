@@ -9,8 +9,8 @@
 #define HPX_F646702C_6556_48FA_BF9D_3E7959983122
 
 #include <hpx/config.hpp>
+#include <hpx/pp/stringize.hpp>
 #include <hpx/util/assert.hpp>
-#include <hpx/util/detail/pp/stringize.hpp>
 
 #include <boost/current_function.hpp>
 #include <boost/io/ios_state.hpp>
@@ -20,6 +20,8 @@
 #include <boost/smart_ptr/detail/spinlock.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <sstream>
 #include <iostream>
 #include <mutex>
 
@@ -64,7 +66,7 @@ struct fixture
     std::size_t get(counter_type c) const;
 
     template <typename T>
-    bool check(char const* file, int line, char const* function,
+    bool check_(char const* file, int line, char const* function,
                counter_type c, T const& t, char const* msg)
     {
         if (!t)
@@ -206,17 +208,31 @@ inline int report_errors(std::ostream& stream = std::cerr)
     }
 }
 
+inline void print_cdash_timing(const char *name, double time)
+{
+    // use stringstream followed by single cout for better multithreaded output
+    std::stringstream temp;
+    temp << "<DartMeasurement name=\"" << name << "\" "
+         << "type=\"numeric/double\">" << time << "</DartMeasurement>";
+    std::cout << temp.str() << std::endl;
+}
+
+inline void print_cdash_timing(const char *name, std::uint64_t time)
+{
+    print_cdash_timing(name, time / 1e9);
+}
+
 }} // hpx::util
 
 #define HPX_TEST(expr)                                                        \
-    ::hpx::util::detail::global_fixture.check                                 \
+    ::hpx::util::detail::global_fixture.check_                                \
         (__FILE__, __LINE__, BOOST_CURRENT_FUNCTION,                          \
          ::hpx::util::counter_test,                                           \
          expr, "test '" HPX_PP_STRINGIZE(expr) "'")                           \
     /***/
 
 #define HPX_TEST_MSG(expr, msg)                                               \
-    ::hpx::util::detail::global_fixture.check                                 \
+    ::hpx::util::detail::global_fixture.check_                                \
         (__FILE__, __LINE__, BOOST_CURRENT_FUNCTION,                          \
          ::hpx::util::counter_test,                                           \
          expr, msg)                                                           \
@@ -278,14 +294,14 @@ inline int report_errors(std::ostream& stream = std::cerr)
     /***/
 
 #define HPX_SANITY(expr)                                                      \
-    ::hpx::util::detail::global_fixture.check                                 \
+    ::hpx::util::detail::global_fixture.check_                                \
         (__FILE__, __LINE__, BOOST_CURRENT_FUNCTION,                          \
          ::hpx::util::counter_sanity,                                         \
          expr, "sanity check '" HPX_PP_STRINGIZE(expr) "'")                   \
     /***/
 
 #define HPX_SANITY_MSG(expr, msg)                                             \
-    ::hpx::util::detail::global_fixture.check                                 \
+    ::hpx::util::detail::global_fixture.check_                                \
         (__FILE__, __LINE__, BOOST_CURRENT_FUNCTION,                          \
          ::hpx::util::counter_sanity,                                         \
          expr, msg)                                                           \

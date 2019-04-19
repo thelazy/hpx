@@ -21,6 +21,7 @@
 
 #include <memory>
 #include <utility>
+#include <type_traits>
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx { namespace util { namespace functional
@@ -38,7 +39,7 @@ namespace hpx { namespace util { namespace functional
                 HPX_THROW_EXCEPTION(hpx::no_success,
                     "extract_locality::operator()",
                     hpx::util::format(
-                        "could not resolve colocated locality for id(%1%)",
+                        "could not resolve colocated locality for id({1})",
                         id));
                 return naming::invalid_id;
             }
@@ -121,7 +122,9 @@ namespace hpx { namespace util { namespace functional
             apply_continuation_impl()
               : bound_() {}
 
-            template <typename Bound_>
+            template <typename Bound_, typename Enable = typename
+                std::enable_if<!std::is_same<typename hpx::util::decay<Bound_>::type,
+                    apply_continuation_impl>::value>::type>
             explicit apply_continuation_impl(Bound_ && bound)
               : bound_(std::forward<Bound_>(bound))
             {}
@@ -264,7 +267,9 @@ namespace hpx { namespace util { namespace functional
               : bound_()
             {}
 
-            template <typename Bound_>
+            template <typename Bound_, typename Enable = typename
+                std::enable_if<!std::is_same<typename hpx::util::decay<Bound_>::type,
+                    async_continuation_impl>::value>::type>
             explicit async_continuation_impl(Bound_ && bound)
               : bound_(std::forward<Bound_>(bound))
             {}

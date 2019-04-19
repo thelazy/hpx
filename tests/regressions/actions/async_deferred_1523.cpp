@@ -56,6 +56,8 @@ int main()
     }
 
     // Same test with lambdas
+    // action lambdas inhibit undefined behavior...
+#if !defined(HPX_HAVE_SANITIZERS)
     {
         auto nt =
             hpx::actions::lambda_to_action(
@@ -91,10 +93,11 @@ int main()
         for (hpx::id_type const& loc : hpx::find_all_localities())
         {
             hpx::id_type id = hpx::async(
-                hpx::launch::deferred, std::move(gl), loc).get();
+                hpx::launch::deferred, gl, loc).get();
             HPX_TEST_EQ(loc, id);
         }
     }
+#endif
 
     return 0;
 }

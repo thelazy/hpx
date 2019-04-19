@@ -7,10 +7,7 @@
 #include <hpx/config.hpp>
 #include <hpx/runtime.hpp>
 #include <hpx/runtime/applier/applier.hpp>
-#if defined(HPX_DEBUG)
 #include <hpx/runtime/components/component_type.hpp>
-#endif
-#include <hpx/runtime/components/runtime_support.hpp>
 #include <hpx/runtime/actions/base_action.hpp>
 #include <hpx/runtime/actions/detail/action_factory.hpp>
 #include <hpx/runtime/agas/addressing_service.hpp>
@@ -162,22 +159,17 @@ namespace hpx { namespace parcelset
     }
 #endif
 
-    parcel::parcel()
-    {}
+    parcel::parcel() {}
 
-    parcel::~parcel()
-    {}
+    parcel::~parcel() {}
 
-    parcel::parcel(
-        naming::gid_type&& dest,
-        naming::address&& addr,
-        std::unique_ptr<actions::base_action> act
-    )
-      : data_(std::move(dest), std::move(addr), act->has_continuation()),
-        action_(std::move(act)),
-        size_(0)
+    parcel::parcel(naming::gid_type&& dest, naming::address&& addr,
+            std::unique_ptr<actions::base_action> act)
+      : data_(std::move(dest), std::move(addr), act->has_continuation())
+      , action_(std::move(act))
+      , size_(0)
     {
-//             HPX_ASSERT(is_valid());
+//         HPX_ASSERT(is_valid());
     }
 
     parcel::parcel(parcel && other)
@@ -456,7 +448,7 @@ namespace hpx { namespace parcelset
         // tell APEX about the received parcel
         apex::recv(data_.parcel_id_.get_lsb(), size_,
             naming::get_locality_id_from_gid(data_.source_id_),
-            reinterpret_cast<std::uint64_t>(action_->get_parent_thread_id()));
+            reinterpret_cast<std::uint64_t>(action_->get_parent_thread_id().get()));
 #endif
 
         return false;

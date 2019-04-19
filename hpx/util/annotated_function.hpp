@@ -14,7 +14,6 @@
 #include <hpx/traits/get_function_address.hpp>
 #include <hpx/traits/get_function_annotation.hpp>
 #include <hpx/util/decay.hpp>
-#include <hpx/util/deferred_call.hpp>
 #include <hpx/util/invoke.hpp>
 #include <hpx/util/thread_description.hpp>
 
@@ -53,36 +52,20 @@ namespace hpx { namespace util
         HPX_NON_COPYABLE(annotate_function);
 
         explicit annotate_function(char const* name)
-          : task_(hpx::get_thread_itt_domain(),
+          : task_(thread_domain_,
                 hpx::util::itt::string_handle(name))
         {}
         template <typename F>
         explicit annotate_function(F && f)
-          : task_(hpx::get_thread_itt_domain(),
+          : task_(thread_domain_,
                 hpx::traits::get_function_annotation_itt<
                     typename std::decay<F>::type
                 >::call(f))
         {}
 
     private:
+        hpx::util::itt::thread_domain thread_domain_;
         hpx::util::itt::task task_;
-    };
-#elif defined(HPX_HAVE_APEX)
-    struct annotate_function
-    {
-        HPX_NON_COPYABLE(annotate_function);
-
-        explicit annotate_function(char const* name)
-          : apex_profiler_(name, threads::get_self_apex_data())
-        {}
-        template <typename F>
-        explicit annotate_function(F && f)
-          : apex_profiler_(hpx::util::thread_description(f),
-                threads::get_self_apex_data())
-        {}
-
-    private:
-        hpx::util::apex_wrapper apex_profiler_;
     };
 #else
     struct annotate_function
@@ -94,7 +77,13 @@ namespace hpx { namespace util
                 hpx::threads::set_thread_description(
                     hpx::threads::get_self_id(), name) :
                 nullptr)
-        {}
+        {
+#if defined(HPX_HAVE_APEX)
+            threads::set_self_apex_data(
+                apex_update_task(threads::get_self_apex_data(),
+                desc_));
+#endif
+        }
 
         template <typename F>
         explicit annotate_function(F && f)
@@ -103,7 +92,13 @@ namespace hpx { namespace util
                     hpx::threads::get_self_id(),
                     hpx::util::thread_description(f)) :
                 nullptr)
-        {}
+        {
+#if defined(HPX_HAVE_APEX)
+            threads::set_self_apex_data(
+                apex_update_task(threads::get_self_apex_data(),
+                desc_));
+#endif
+        }
 
         ~annotate_function()
         {
@@ -138,7 +133,8 @@ namespace hpx { namespace util
 
         public:
             template <typename ... Ts>
-            typename invoke_deferred_result<F, Ts...>::type
+            typename invoke_result<
+                typename util::decay_unwrap<F>::type, Ts...>::type
             operator()(Ts && ... ts)
             {
                 annotate_function func(name_);
@@ -170,10 +166,14 @@ namespace hpx { namespace util
     }
 
     template <typename F>
-    detail::annotated_function<F>
+    detail::annotated_function<typename std::decay<F>::type>
     annotated_function(F && f, char const* name = nullptr)
     {
-        return detail::annotated_function<F>(std::forward<F>(f), name);
+        typedef detail::annotated_function<
+            typename std::decay<F>::type
+        > result_type;
+
+        return result_type(std::forward<F>(f), name);
     }
 
 #else
@@ -182,9 +182,9 @@ namespace hpx { namespace util
     {
         HPX_NON_COPYABLE(annotate_function);
 
-        explicit annotate_function(char const* name) {}
+        explicit annotate_function(char const* /*name*/) {}
         template <typename F>
-        explicit HPX_HOST_DEVICE annotate_function(F && f) {}
+        explicit HPX_HOST_DEVICE annotate_function(F && /*f*/) {}
 
         // add empty (but non-trivial) destructor to silence warnings
         HPX_HOST_DEVICE ~annotate_function() {}

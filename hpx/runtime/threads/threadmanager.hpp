@@ -13,13 +13,13 @@
 #include <hpx/compat/mutex.hpp>
 #include <hpx/compat/thread.hpp>
 #include <hpx/exception_fwd.hpp>
-#include <hpx/performance_counters/counters.hpp>
+#include <hpx/performance_counters/counters_fwd.hpp>
 #include <hpx/runtime/naming/name.hpp>
 #include <hpx/runtime/resource/detail/partitioner.hpp>
 #include <hpx/runtime/threads/detail/thread_num_tss.hpp>
-#include <hpx/runtime/threads/detail/thread_pool_base.hpp>
 #include <hpx/runtime/threads/policies/scheduler_mode.hpp>
 #include <hpx/runtime/threads/thread_init_data.hpp>
+#include <hpx/runtime/threads/thread_pool_base.hpp>
 #include <hpx/state.hpp>
 #include <hpx/util/block_profiler.hpp>
 #include <hpx/util/io_service_pool.hpp>
@@ -54,7 +54,7 @@ namespace hpx { namespace threads
 
     public:
         typedef threads::policies::callback_notifier notification_policy_type;
-        typedef std::unique_ptr<detail::thread_pool_base> pool_type;
+        typedef std::unique_ptr<thread_pool_base> pool_type;
         typedef threads::policies::scheduler_base scheduler_type;
         typedef std::vector<pool_type> pool_vector;
 
@@ -73,13 +73,13 @@ namespace hpx { namespace threads
         void print_pools(std::ostream&);
 
         // Get functions
-        detail::thread_pool_base& default_pool() const;
+        thread_pool_base& default_pool() const;
 
         scheduler_type& default_scheduler() const;
 
-        detail::thread_pool_base& get_pool(std::string const& pool_name) const;
-        detail::thread_pool_base& get_pool(detail::pool_id_type pool_id) const;
-        detail::thread_pool_base& get_pool(std::size_t thread_index) const;
+        thread_pool_base& get_pool(std::string const& pool_name) const;
+        thread_pool_base& get_pool(pool_id_type pool_id) const;
+        thread_pool_base& get_pool(std::size_t thread_index) const;
 
         /// The function \a register_work adds a new work item to the thread
         /// manager. It doesn't immediately create a new \a thread, it just adds
@@ -158,6 +158,12 @@ namespace hpx { namespace threads
         ///
         void stop (bool blocking = true);
 
+        // \brief Suspend all thread pools.
+        void suspend();
+
+        // \brief Resume all thread pools.
+        void resume();
+
         /// \brief Return whether the thread manager is still running
         //! This returns the "minimal state", i.e. the state of the
         //! least advanced thread pool
@@ -181,6 +187,8 @@ namespace hpx { namespace threads
             thread_priority priority = thread_priority_default,
             std::size_t num_thread = std::size_t(-1), bool reset = false);
 
+        std::int64_t get_background_thread_count();
+
         // Enumerate all matching threads
         bool enumerate_threads(
             util::function_nonser<bool(thread_id_type)> const& f,
@@ -195,7 +203,7 @@ namespace hpx { namespace threads
         //        have been terminated but which are still held in the queue
         //        of terminated threads. Some schedulers might not do anything
         //        here.
-        bool cleanup_terminated(bool delete_all = false);
+        bool cleanup_terminated(bool delete_all);
 
         /// \brief Return the number of OS threads running in this thread-manager
         ///
@@ -215,8 +223,8 @@ namespace hpx { namespace threads
         compat::thread& get_os_thread_handle(std::size_t num_thread) const
         {
             std::lock_guard<mutex_type> lk(mtx_);
-            detail::pool_id_type id = threads_lookup_[num_thread];
-            detail::thread_pool_base& pool = get_pool(id);
+            pool_id_type id = threads_lookup_[num_thread];
+            thread_pool_base& pool = get_pool(id);
             return pool.get_os_thread_handle(num_thread);
         }
 
@@ -235,14 +243,6 @@ namespace hpx { namespace threads
             {
                 pool_iter->report_error(num_thread, e);
             }
-        }
-
-        // Return the (global) sequence number of the current thread
-        std::size_t get_worker_thread_num(bool* numa_sensitive = nullptr)
-        {
-            if (get_self_ptr() == nullptr)
-                return std::size_t(-1);
-            return detail::thread_num_tss_.get_worker_thread_num();
         }
 
     public:
@@ -282,6 +282,32 @@ namespace hpx { namespace threads
             }
         }
 
+        void add_scheduler_mode(threads::policies::scheduler_mode mode)
+        {
+            for (auto& pool_iter : pools_)
+            {
+                pool_iter->add_scheduler_mode(mode);
+            }
+        }
+
+        void add_remove_scheduler_mode(
+            threads::policies::scheduler_mode to_add_mode,
+            threads::policies::scheduler_mode to_remove_mode)
+        {
+            for (auto& pool_iter : pools_)
+            {
+                pool_iter->add_remove_scheduler_mode(to_add_mode, to_remove_mode);
+            }
+        }
+
+        void remove_scheduler_mode(threads::policies::scheduler_mode mode)
+        {
+            for (auto& pool_iter : pools_)
+            {
+                pool_iter->remove_scheduler_mode(mode);
+            }
+        }
+
         void reset_thread_distribution()
         {
             for (auto& pool_iter : pools_)
@@ -292,12 +318,12 @@ namespace hpx { namespace threads
 
         void init_tss(std::size_t num)
         {
-            detail::thread_num_tss_.init_tss(num);
+            detail::set_thread_num_tss(num);
         }
 
         void deinit_tss()
         {
-            detail::thread_num_tss_.deinit_tss();
+            detail::set_thread_num_tss(std::size_t(-1));
         }
 
     public:
@@ -313,7 +339,7 @@ namespace hpx { namespace threads
 
         typedef std::int64_t (threadmanager::*threadmanager_counter_func)(
             bool reset);
-        typedef std::int64_t (detail::thread_pool_base::*threadpool_counter_func)(
+        typedef std::int64_t (thread_pool_base::*threadpool_counter_func)(
             std::size_t num_thread, bool reset);
 
         naming::gid_type locality_pool_thread_counter_creator(
@@ -338,6 +364,11 @@ namespace hpx { namespace threads
         std::int64_t get_average_thread_wait_time(bool reset);
         std::int64_t get_average_task_wait_time(bool reset);
 #endif
+#if defined(HPX_HAVE_BACKGROUND_THREAD_COUNTERS) && defined(HPX_HAVE_THREAD_IDLE_RATES)
+        std::int64_t get_background_work_duration(bool reset);
+        std::int64_t get_background_overhead(bool reset);
+#endif    //HPX_HAVE_BACKGROUND_THREAD_COUNTERS
+
         std::int64_t get_cumulative_duration(bool reset);
 
         std::int64_t get_thread_count_unknown(bool reset)
@@ -409,7 +440,7 @@ private:
         // are in which pool.
         std::size_t num_threads_;
 
-        std::vector<detail::pool_id_type> threads_lookup_;
+        std::vector<pool_id_type> threads_lookup_;
 
 #ifdef HPX_HAVE_TIMER_POOL
         util::io_service_pool& timer_pool_;     // used for timed set_state

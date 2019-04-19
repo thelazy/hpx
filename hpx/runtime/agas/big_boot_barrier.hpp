@@ -15,10 +15,7 @@
 #include <hpx/lcos/local/spinlock.hpp>
 #include <hpx/runtime.hpp>
 #include <hpx/runtime/naming/address.hpp>
-#include <hpx/runtime/parcelset/parcelhandler.hpp>
-#include <hpx/runtime/parcelset/parcelport.hpp>
-#include <hpx/runtime/parcelset/put_parcel.hpp>
-#include <hpx/runtime/parcelset/detail/parcel_await.hpp>
+#include <hpx/runtime/parcelset_fwd.hpp>
 #include <hpx/util/assert.hpp>
 #include <hpx/util/connection_cache.hpp>
 #include <hpx/util/io_service_pool.hpp>
@@ -106,27 +103,7 @@ public:
       , std::uint32_t target_locality_id
       , parcelset::locality dest
       , Action act
-      , Args &&... args)
-    { // {{{
-        HPX_ASSERT(pp);
-        naming::address addr(naming::get_gid_from_locality_id(target_locality_id));
-        parcelset::parcel p(
-            parcelset::detail::create_parcel::call(std::false_type(),
-                naming::get_gid_from_locality_id(target_locality_id),
-                std::move(addr), act, std::forward<Args>(args)...));
-#if defined(HPX_HAVE_PARCEL_PROFILING)
-        if (!p.parcel_id())
-        {
-            p.parcel_id() = parcelset::parcel::generate_unique_id(source_locality_id);
-        }
-#endif
-
-        parcelset::detail::parcel_await(std::move(p), parcelset::write_handler_type(), 0,
-            [this, dest](parcelset::parcel&& p, parcelset::write_handler_type&&)
-            {
-                pp->send_early_parcel(dest, std::move(p));
-            }).apply();
-    } // }}}
+      , Args &&... args);
 
     template <typename Action, typename... Args>
     void apply_late(
@@ -134,16 +111,7 @@ public:
       , std::uint32_t target_locality_id
       , parcelset::locality const & dest
       , Action act
-      , Args &&... args)
-    { // {{{
-        naming::address addr(naming::get_gid_from_locality_id(target_locality_id));
-
-        parcelset::put_parcel(
-            naming::id_type(
-                naming::get_gid_from_locality_id(target_locality_id),
-                naming::id_type::unmanaged),
-            std::move(addr), act, std::forward<Args>(args)...);
-    } // }}}
+      , Args &&... args);
 
     void apply_notification(
         std::uint32_t source_locality_id
@@ -159,16 +127,7 @@ public:
     // no-op on non-bootstrap localities
     void trigger();
 
-    void add_thunk(util::unique_function_nonser<void()>* f)
-    {
-        std::size_t k = 0;
-        while(!thunks.push(f))
-        {
-            // Wait until succesfully pushed ...
-            hpx::lcos::local::spinlock::yield(k);
-            ++k;
-        }
-    }
+    void add_thunk(util::unique_function_nonser<void()>* f);
 
     void add_locality_endpoints(std::uint32_t locality_id,
         parcelset::endpoints_type const& endpoints);

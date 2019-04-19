@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2014 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -7,7 +7,7 @@
 #define HPX_PERFORMANCE_COUNTERS_PERFORMANCE_COUNTER_BASE_SEP_18_2014_0732PM
 
 #include <hpx/config.hpp>
-#include <hpx/performance_counters/counters.hpp>
+#include <hpx/performance_counters/counters_fwd.hpp>
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace hpx { namespace performance_counters
@@ -42,6 +42,9 @@ namespace hpx { namespace performance_counters
 
         // Stop the Performance Counter.
         virtual bool stop() = 0;
+
+        // Re-initialize the Performance Counter.
+        virtual void reinit(bool reset) = 0;
     };
     //]
 }}

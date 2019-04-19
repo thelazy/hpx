@@ -8,7 +8,6 @@
 set(subdirs
     1d_stencil
     accumulators
-    allgather
     async_io
     balancing
     cancelable_action
@@ -18,6 +17,7 @@ set(subdirs
     jacobi_smp
     nqueen
     performance_counters
+    pipeline
     quickstart
     qt
     random_mem_access
@@ -56,6 +56,11 @@ if(HPX_WITH_COMPUTE)
 endif()
 
 foreach(subdir ${subdirs})
+  if(HPX_WITH_TESTS AND HPX_WITH_TESTS_EXAMPLES)
+    add_hpx_pseudo_target(tests.examples.${subdir})
+    add_hpx_pseudo_dependencies(tests.examples tests.examples.${subdir})
+  endif()
+
   add_hpx_pseudo_target(examples.${subdir})
   add_subdirectory(${subdir})
   add_hpx_pseudo_dependencies(examples examples.${subdir})

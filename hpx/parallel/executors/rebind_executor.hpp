@@ -7,43 +7,15 @@
 #define HPX_PARALLEL_REBIND_EXECUTOR_SEP_07_2016_0658AM
 
 #include <hpx/config.hpp>
+#include <hpx/parallel/executors/execution_fwd.hpp>
 #include <hpx/traits/executor_traits.hpp>
 #include <hpx/traits/is_launch_policy.hpp>
-
-#if defined(HPX_HAVE_EXECUTOR_COMPATIBILITY)
-#include <hpx/parallel/executors/execution_fwd.hpp>
-#include <hpx/parallel/executors/v1/executor_traits.hpp>
 #include <hpx/util/decay.hpp>
 
 #include <type_traits>
 
-namespace hpx { namespace parallel { inline namespace v1
+namespace hpx { namespace parallel { namespace execution
 {
-    ///////////////////////////////////////////////////////////////////////////
-    /// Function invocations executed by a group of sequential execution agents
-    /// execute in sequential order.
-    using sequential_execution_tag =
-        parallel::execution::sequenced_execution_tag;
-
-    /// Function invocations executed by a group of parallel execution agents
-    /// execute in unordered fashion. Any such invocations executing in the
-    /// same thread are indeterminately sequenced with respect to each other.
-    ///
-    /// \note \a parallel_execution_tag is weaker than
-    ///       \a sequential_execution_tag.
-    using parallel_execution_tag =
-        parallel::execution::parallel_execution_tag;
-
-    /// Function invocations executed by a group of vector execution agents are
-    /// permitted to execute in unordered fashion when executed in different
-    /// threads, and un-sequenced with respect to one another when executed in
-    /// the same thread.
-    ///
-    /// \note \a vector_execution_tag is weaker than
-    ///       \a parallel_execution_tag.
-    using vector_execution_tag =
-        parallel::execution::unsequenced_execution_tag;
-
     ///////////////////////////////////////////////////////////////////////////
     namespace detail
     {
@@ -59,17 +31,17 @@ namespace hpx { namespace parallel { inline namespace v1
         {};
 
         template <>
-        struct is_not_weaker<parallel_execution_tag, vector_execution_tag>
+        struct is_not_weaker<parallel_execution_tag, unsequenced_execution_tag>
           : std::true_type
         {};
 
         template <>
-        struct is_not_weaker<sequential_execution_tag, vector_execution_tag>
+        struct is_not_weaker<sequenced_execution_tag, unsequenced_execution_tag>
           : std::true_type
         {};
 
         template <>
-        struct is_not_weaker<sequential_execution_tag, parallel_execution_tag>
+        struct is_not_weaker<sequenced_execution_tag, parallel_execution_tag>
           : std::true_type
         {};
         /// \endcond
@@ -81,8 +53,8 @@ namespace hpx { namespace parallel { inline namespace v1
     struct rebind_executor
     {
         /// \cond NOINTERNAL
-        typedef typename hpx::util::decay<Executor>::type executor_type;
-        typedef typename hpx::util::decay<Parameters>::type parameters_type;
+        typedef typename std::decay<Executor>::type executor_type;
+        typedef typename std::decay<Parameters>::type parameters_type;
 
         typedef typename ExecutionPolicy::execution_category category1;
         typedef typename hpx::traits::executor_execution_category<
@@ -90,8 +62,8 @@ namespace hpx { namespace parallel { inline namespace v1
             >::type category2;
 
         static_assert(
-            (parallel::v1::detail::is_not_weaker<category2, category1>::value),
-            "parallel::v1::detail::is_not_weaker<category2, category1>::value"
+            detail::is_not_weaker<category2, category1>::value,
+            "detail::is_not_weaker<category2, category1>::value"
         );
         /// \endcond
 
@@ -101,6 +73,5 @@ namespace hpx { namespace parallel { inline namespace v1
             >::type type;
     };
 }}}
-#endif
 
 #endif

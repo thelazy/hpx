@@ -24,7 +24,6 @@
 //#define VERIFY_AFFINITY_MASKS
 
 ///////////////////////////////////////////////////////////////////////////////
-#if defined(HPX_HAVE_HWLOC)
 namespace hpx { namespace threads { namespace detail
 {
     std::ostream& operator<<(std::ostream& os, spec_type const& data)
@@ -89,6 +88,11 @@ namespace test
 //   thread:0-1=numanode:0.pu:0
 //   thread:0-1=numanode:0.pu:0-1
 //   thread:0-1=socket:0.core:all.pu:0
+
+#if defined(__GNUC__) && __GNUC__ < 5
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
     data_good data[] =
     {
@@ -972,6 +976,10 @@ namespace test
         { "", 0,  {data_good_thread(), data_good_thread()}, {0,0} }
     };
 
+#if defined(__GNUC__) && __GNUC__ < 5
+#  pragma GCC diagnostic pop
+#endif
+
     void good_testing(data_good const* t, char const* const options)
     {
         hpx::threads::detail::mappings_type mappings;
@@ -1093,17 +1101,14 @@ namespace test
         }
     }
 }
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 int hpx_main()
 {
-#if defined(HPX_HAVE_HWLOC)
     {
         test::good();
         test::bad();
     }
-#endif
 
     return hpx::finalize();
 }

@@ -19,6 +19,8 @@
 
 ///////////////////////////////////////////////////////////////////////////////
 int test_count = 100;
+unsigned int seed = std::random_device{}();
+std::mt19937 gen(seed);
 
 struct Point
 {
@@ -29,27 +31,26 @@ struct Point
 void measure_transform_reduce(std::size_t size)
 {
     std::vector<Point> data_representation(size,
-        Point{double(std::rand()), double(std::rand())});
+        Point{double(gen()), double(gen())});
 
     // invoke transform_reduce
     double result =
         hpx::parallel::transform_reduce(hpx::parallel::execution::par,
-        std::begin(data_representation),
-        std::end(data_representation),
-        0.0,
-        [](Point r)
-        {
-            return r.x * r.y;
-        },
-        std::plus<double>()
-    );
+            std::begin(data_representation),
+            std::end(data_representation),
+            0.0,
+            std::plus<double>(),
+            [](Point r)
+            {
+                return r.x * r.y;
+            });
     HPX_UNUSED(result);
 }
 
 void measure_transform_reduce_old(std::size_t size)
 {
     std::vector<Point> data_representation(size,
-        Point{double(std::rand()), double(std::rand())});
+        Point{double(gen()), double(gen())});
 
     //invoke old reduce
     Point result =

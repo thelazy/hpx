@@ -48,8 +48,6 @@
 
 namespace hpx { namespace agas
 {
-struct request;
-struct response;
 HPX_EXPORT void destroy_big_boot_barrier();
 
 struct HPX_EXPORT addressing_service
@@ -61,9 +59,8 @@ public:
     // {{{ types
     typedef components::component_type component_id_type;
 
-    typedef hpx::util::function<
-        void(std::string const&, naming::gid_type const&)
-    > iterate_names_function_type;
+    typedef std::map<std::string, naming::id_type>
+        iterate_names_return_type;
 
     typedef hpx::util::function<
         void(std::string const&, components::component_type)
@@ -127,8 +124,7 @@ public:
     resolved_localities_type resolved_localities_;
 
     addressing_service(
-        parcelset::parcelhandler& ph
-      , util::runtime_configuration const& ini_
+        util::runtime_configuration const& ini_
       , runtime_mode runtime_type_
         );
 
@@ -137,6 +133,9 @@ public:
         // TODO: Free the future pools?
         destroy_big_boot_barrier();
     }
+
+    void bootstrap(
+        parcelset::parcelhandler& ph, util::runtime_configuration const& ini);
 
     void initialize(parcelset::parcelhandler& ph, std::uint64_t rts_lva,
         std::uint64_t mem_lva);
@@ -154,7 +153,7 @@ public:
         state_.store(new_state);
     }
 
-    naming::gid_type const& get_local_locality(error_code& ec = throws) const
+    naming::gid_type const& get_local_locality(error_code& /*ec*/ = throws) const
     {
         return locality_;
     }
@@ -226,13 +225,13 @@ protected:
     void launch_hosted();
 
     naming::address resolve_full_postproc(
-        future<primary_namespace::resolved_type> f
-      , naming::gid_type const& id
+        naming::gid_type const& id
+      , future<primary_namespace::resolved_type> f
         );
     bool bind_postproc(
-        future<bool> f
-      , naming::gid_type const& id
+        naming::gid_type const& id
       , gva const& g
+      , future<bool> f
         );
 
     /// Maintain list of migrated objects
@@ -1184,25 +1183,15 @@ public:
     ///        name.
     ///
     /// This function iterates over all registered global ids and
-    /// unconditionally invokes the supplied hpx#function for ever found entry.
+    /// returns every found entry matching the given name pattern.
     /// Any error results in an exception thrown (or reported) from this
     /// function.
     ///
-    /// \param f          [in] a \a hpx#function encapsulating an action to be
-    ///                   invoked for every currently registered global name.
-    /// \param ec         [in,out] this represents the error status on exit,
-    ///                   if this is pre-initialized to \a hpx#throws
-    ///                   the function will throw on error instead.
+    /// \param pattern    [in] pattern (poosibly using wildcards) to match
+    ///                   all existing entries against
     ///
-    /// \note             As long as \a ec is not pre-initialized to
-    ///                   \a hpx#throws this function doesn't
-    ///                   throw but returns the result code using the
-    ///                   parameter \a ec. Otherwise it throws an instance
-    ///                   of hpx#exception.
-    bool iterate_ids(
-        iterate_names_function_type const& f
-      , error_code& ec = throws
-        );
+    hpx::future<iterate_names_return_type> iterate_ids(
+        std::string const& pattern);
 
     /// \brief Register a global name with a global address (id)
     ///
@@ -1240,12 +1229,9 @@ public:
 
     bool register_name(
         std::string const& name
-      , naming::id_type const& id
-      , error_code& ec = throws
-        )
-    {
-        return register_name_async(name, id).get(ec);
-    }
+        , naming::id_type const& id
+        , error_code& ec = throws
+    );
 
     /// \brief Unregister a global name (release any existing association)
     ///
@@ -1388,9 +1374,9 @@ public:
     /// start/stop migration of an object
     ///
     /// \returns Current locality and address of the object to migrate
-    hpx::future<std::pair<naming::id_type, naming::address> >
-        begin_migration_async(naming::id_type const& id);
-    hpx::future<bool> end_migration_async(naming::id_type const& id);
+    hpx::future<std::pair<naming::id_type, naming::address>>
+        begin_migration(naming::id_type const& id);
+    bool end_migration(naming::id_type const& id);
 
     /// Maintain list of migrated objects
     std::pair<bool, components::pinned_ptr>
@@ -1401,7 +1387,8 @@ public:
     /// Delay migration until the object is unpinned otherwise.
     hpx::future<void> mark_as_migrated(naming::gid_type const& gid,
         util::unique_function_nonser<
-            std::pair<bool, hpx::future<void> >()> && f);
+            std::pair<bool, hpx::future<void> >()> && f,
+        bool expect_to_be_marked_as_migrating);
 
     /// Remove the given object from the table of migrated objects
     void unmark_as_migrated(naming::gid_type const& gid);

@@ -14,6 +14,7 @@
 #include <hpx/lcos/local/spinlock.hpp>
 #include <hpx/runtime/threads/thread_enums.hpp>
 #include <hpx/util/assert_owns_lock.hpp>
+#include <hpx/util/cache_aligned_data.hpp>
 #include <hpx/util/register_locks.hpp>
 #include <hpx/util/steady_clock.hpp>
 #include <hpx/util/unlock_guard.hpp>
@@ -37,36 +38,39 @@ namespace hpx { namespace lcos { namespace local
     public:
         void notify_one(error_code& ec = throws)
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            cond_.notify_one(std::move(l), ec);
+            std::unique_lock<mutex_type> l(mtx_.data_);
+            cond_.data_.notify_one(std::move(l), ec);
         }
 
         void notify_all(error_code& ec = throws)
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            cond_.notify_all(std::move(l), ec);
+            std::unique_lock<mutex_type> l(mtx_.data_);
+            cond_.data_.notify_all(std::move(l), ec);
         }
 
         void wait(std::unique_lock<mutex>& lock, error_code& ec = throws)
         {
             HPX_ASSERT_OWNS_LOCK(lock);
             util::ignore_while_checking<std::unique_lock<mutex> > il(&lock);
-
-            std::unique_lock<mutex_type> l(mtx_);
+            std::unique_lock<mutex_type> l(mtx_.data_);
             util::unlock_guard<std::unique_lock<mutex> > unlock(lock);
+            //The following ensures that the inner lock will be unlocked
+            //before the outer to avoid deadlock (fixes issue #3608)
+            std::lock_guard<std::unique_lock<mutex_type> > unlock_next(
+                l, std::adopt_lock);
 
-            cond_.wait(l, ec);
+            cond_.data_.wait(l, ec);
 
             // We need to ignore our internal mutex for the user provided lock
             // being able to be reacquired without a lock held during suspension
             // error. We can't use RAII here since the guard object would get
             // destructed before the unlock_guard.
-            hpx::util::ignore_lock(&mtx_);
+            hpx::util::ignore_lock(&mtx_.data_);
         }
 
         template <class Predicate>
         void wait(std::unique_lock<mutex>& lock, Predicate pred,
-            error_code& ec = throws)
+            error_code& /*ec*/ = throws)
         {
             HPX_ASSERT_OWNS_LOCK(lock);
 
@@ -83,17 +87,21 @@ namespace hpx { namespace lcos { namespace local
             HPX_ASSERT_OWNS_LOCK(lock);
 
             util::ignore_while_checking<std::unique_lock<mutex> > il(&lock);
-            std::unique_lock<mutex_type> l(mtx_);
+            std::unique_lock<mutex_type> l(mtx_.data_);
             util::unlock_guard<std::unique_lock<mutex> > unlock(lock);
+            //The following ensures that the inner lock will be unlocked
+            //before the outer to avoid deadlock (fixes issue #3608)
+            std::lock_guard<std::unique_lock<mutex_type> > unlock_next(
+                l, std::adopt_lock);
 
             threads::thread_state_ex_enum const reason =
-                cond_.wait_until(l, abs_time, ec);
+                cond_.data_.wait_until(l, abs_time, ec);
 
             // We need to ignore our internal mutex for the user provided lock
             // being able to be reacquired without a lock held during suspension
             // error. We can't use RAII here since the guard object would get
             // destructed before the unlock_guard.
-            hpx::util::ignore_lock(&mtx_);
+            hpx::util::ignore_lock(&mtx_.data_);
 
             if (ec) return cv_status::error;
 
@@ -133,8 +141,8 @@ namespace hpx { namespace lcos { namespace local
         }
 
     private:
-        mutable mutex_type mtx_;
-        detail::condition_variable cond_;
+        mutable util::cache_line_data<mutex_type> mtx_;
+        util::cache_line_data<detail::condition_variable> cond_;
     };
 
     class condition_variable_any
@@ -145,14 +153,14 @@ namespace hpx { namespace lcos { namespace local
     public:
         void notify_one(error_code& ec = throws)
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            cond_.notify_one(std::move(l), ec);
+            std::unique_lock<mutex_type> l(mtx_.data_);
+            cond_.data_.notify_one(std::move(l), ec);
         }
 
         void notify_all(error_code& ec = throws)
         {
-            std::unique_lock<mutex_type> l(mtx_);
-            cond_.notify_all(std::move(l), ec);
+            std::unique_lock<mutex_type> l(mtx_.data_);
+            cond_.data_.notify_all(std::move(l), ec);
         }
 
         template <class Lock>
@@ -161,16 +169,20 @@ namespace hpx { namespace lcos { namespace local
             HPX_ASSERT_OWNS_LOCK(lock);
 
             util::ignore_all_while_checking ignore_lock;
-            std::unique_lock<mutex_type> l(mtx_);
+            std::unique_lock<mutex_type> l(mtx_.data_);
             util::unlock_guard<Lock> unlock(lock);
+            //The following ensures that the inner lock will be unlocked
+            //before the outer to avoid deadlock (fixes issue #3608)
+            std::lock_guard<std::unique_lock<mutex_type> > unlock_next(
+                l, std::adopt_lock);
 
-            cond_.wait(l, ec);
+            cond_.data_.wait(l, ec);
 
             // We need to ignore our internal mutex for the user provided lock
             // being able to be reacquired without a lock held during suspension
             // error. We can't use RAII here since the guard object would get
             // destructed before the unlock_guard.
-            hpx::util::ignore_lock(&mtx_);
+            hpx::util::ignore_lock(&mtx_.data_);
         }
 
         template <class Lock, class Predicate>
@@ -192,17 +204,21 @@ namespace hpx { namespace lcos { namespace local
             HPX_ASSERT_OWNS_LOCK(lock);
 
             util::ignore_all_while_checking ignore_lock;
-            std::unique_lock<mutex_type> l(mtx_);
+            std::unique_lock<mutex_type> l(mtx_.data_);
             util::unlock_guard<Lock> unlock(lock);
+            //The following ensures that the inner lock will be unlocked
+            //before the outer to avoid deadlock (fixes issue #3608)
+            std::lock_guard<std::unique_lock<mutex_type> > unlock_next(
+                l, std::adopt_lock);
 
             threads::thread_state_ex_enum const reason =
-                cond_.wait_until(l, abs_time, ec);
+                cond_.data_.wait_until(l, abs_time, ec);
 
             // We need to ignore our internal mutex for the user provided lock
             // being able to be reacquired without a lock held during suspension
             // error. We can't use RAII here since the guard object would get
             // destructed before the unlock_guard.
-            hpx::util::ignore_lock(&mtx_);
+            hpx::util::ignore_lock(&mtx_.data_);
 
             if (ec) return cv_status::error;
 
@@ -241,8 +257,8 @@ namespace hpx { namespace lcos { namespace local
         }
 
     private:
-        mutable mutex_type mtx_;
-        detail::condition_variable cond_;
+        mutable util::cache_line_data<mutex_type> mtx_;
+        util::cache_line_data<detail::condition_variable> cond_;
     };
 }}}
 

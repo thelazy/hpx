@@ -1,4 +1,4 @@
-//  Copyright (c) 2017 Taeguk Kwon
+//  Copyright (c) 2017-2018 Taeguk Kwon
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -24,6 +24,9 @@
 #include "test_utils.hpp"
 
 ///////////////////////////////////////////////////////////////////////////////
+int seed = std::random_device{}();
+std::mt19937 _gen(seed);
+
 struct throw_always
 {
     template <typename T>
@@ -46,9 +49,11 @@ struct user_defined_type
 {
     user_defined_type() = default;
     user_defined_type(int rand_no)
-      : val(rand_no),
-        name(name_list[std::rand() % name_list.size()])
-    {}
+      : val(rand_no)
+    {
+        std::uniform_int_distribution<> dist(0,name_list.size()-1);
+        name = name_list[dist(_gen)];
+    }
 
     bool operator<(user_defined_type const& t) const
     {
@@ -96,7 +101,7 @@ struct random_fill
 {
     random_fill() = default;
     random_fill(int rand_base, int range)
-      : gen(std::rand()),
+      : gen(_gen()),
         dist(rand_base - range / 2, rand_base + range / 2)
     {}
 
@@ -147,9 +152,7 @@ void test_inplace_merge(ExPolicy policy, IteratorTag, DataType, Comp comp,
         sol_first, sol_middle, sol_last,
         comp);
 
-    bool equality = std::equal(
-        res_first, res_last,
-        sol_first, sol_last);
+    bool equality = test::equal(res_first, res_last, sol_first, sol_last);
 
     HPX_TEST(equality);
 }
@@ -192,9 +195,7 @@ void test_inplace_merge_async(ExPolicy policy, IteratorTag, DataType, Comp comp,
         sol_first, sol_middle, sol_last,
         comp);
 
-    bool equality = std::equal(
-        res_first, res_last,
-        sol_first, sol_last);
+    bool equality = test::equal(res_first, res_last, sol_first, sol_last);
 
     HPX_TEST(equality);
 }
@@ -406,15 +407,14 @@ void test_inplace_merge_etc(ExPolicy policy, IteratorTag,
         std::inplace_merge(
             sol_first, sol_middle, sol_last);
 
-        bool equality = std::equal(
-            res_first, res_last,
-            sol_first, sol_last);
+        bool equality = test::equal(res_first, res_last, sol_first, sol_last);
 
         HPX_TEST(equality);
     }
 
     // Test projection.
     {
+#if defined(HPX_HAVE_STABLE_INPLACE_MERGE)
         typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
         sol = res = org;
@@ -431,11 +431,10 @@ void test_inplace_merge_etc(ExPolicy policy, IteratorTag,
             });
 
         // The container must not be changed.
-        bool equality = std::equal(
-            res_first, res_last,
-            sol_first, sol_last);
+        bool equality = test::equal(res_first, res_last, sol_first, sol_last);
 
         HPX_TEST(equality);
+#endif
     }
 }
 
@@ -444,6 +443,7 @@ template <typename ExPolicy, typename IteratorTag, typename DataType>
 void test_inplace_merge_stable(ExPolicy policy, IteratorTag,
     DataType, int rand_base)
 {
+#if defined(HPX_HAVE_STABLE_INPLACE_MERGE)
     static_assert(
         hpx::parallel::execution::is_execution_policy<ExPolicy>::value,
         "hpx::parallel::execution::is_execution_policy<ExPolicy>::value");
@@ -501,6 +501,7 @@ void test_inplace_merge_stable(ExPolicy policy, IteratorTag,
 
     HPX_TEST(test_is_meaningful);
     HPX_TEST(stable);
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -509,7 +510,7 @@ void test_inplace_merge()
 {
     using namespace hpx::parallel;
 
-    int rand_base = std::rand();
+    int rand_base = _gen();
 
     ////////// Test cases for 'int' type.
     test_inplace_merge(execution::seq, IteratorTag(), int(),

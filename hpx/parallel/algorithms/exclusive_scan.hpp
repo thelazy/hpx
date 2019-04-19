@@ -1,4 +1,4 @@
-//  Copyright (c) 2014-2017 Hartmut Kaiser
+//  Copyright (c) 2014-2018 Hartmut Kaiser
 //  Copyright (c) 2016 Minh-Khanh Do
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -124,12 +124,10 @@ namespace hpx { namespace parallel { inline namespace v1
                 using hpx::util::make_zip_iterator;
 
                 auto f3 =
-                    [op, policy](
+                    [op](
                         zip_iterator part_begin, std::size_t part_size,
-                        hpx::shared_future<T> curr, hpx::shared_future<T> next
-                    )
+                        hpx::shared_future<T> curr, hpx::shared_future<T> next)
                     {
-                        HPX_UNUSED(policy);
 
                         next.get();     // rethrow exceptions
 
@@ -150,20 +148,22 @@ namespace hpx { namespace parallel { inline namespace v1
                     std::forward<ExPolicy>(policy),
                     make_zip_iterator(first, dest), count, init,
                     // step 1 performs first part of scan algorithm
-                    [op, conv, last](zip_iterator part_begin,
-                        std::size_t part_size) -> T
+                    [op, HPX_CAPTURE_FORWARD(conv), last](
+                        zip_iterator part_begin, std::size_t part_size) -> T
                     {
-                        T part_init = hpx::util::invoke(conv, get<0>(*part_begin++));
+                        T part_init = hpx::util::invoke(
+                            conv, get<0>(*part_begin++));
 
                         auto iters = part_begin.get_iterator_tuple();
                         if(get<0>(iters) != last)
+                        {
                             return sequential_exclusive_scan_n(
                                 get<0>(iters),
                                 part_size - 1,
                                 get<1>(iters),
                                 part_init, op, conv);
-                        else
-                            return part_init;
+                        }
+                        return part_init;
                     },
                     // step 2 propagates the partition results from left
                     // to right
@@ -186,19 +186,9 @@ namespace hpx { namespace parallel { inline namespace v1
         exclusive_scan_(ExPolicy&& policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest,
             T const& init, Op && op, std::false_type, Conv && conv = Conv()) {
 
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-            typedef std::integral_constant<bool,
-                    parallel::execution::is_sequenced_execution_policy<
-                        ExPolicy
-                    >::value ||
-                   !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-                   !hpx::traits::is_forward_iterator<FwdIter2>::value
-                > is_seq;
-#else
             typedef parallel::execution::is_sequenced_execution_policy<
                         ExPolicy
                     > is_seq;
-#endif
 
             return exclusive_scan<FwdIter2>().call(
                 std::forward<ExPolicy>(policy), is_seq(),
@@ -302,22 +292,12 @@ namespace hpx { namespace parallel { inline namespace v1
     exclusive_scan(ExPolicy&& policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest,
         T init, Op && op)
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Requires at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value ||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Requires at least forward iterator.");
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter2>::value),
             "Requires at least forward iterator.");
-#endif
 
         typedef hpx::traits::is_segmented_iterator<FwdIter1> is_segmented;
 
@@ -394,22 +374,12 @@ namespace hpx { namespace parallel { inline namespace v1
     exclusive_scan(ExPolicy&& policy, FwdIter1 first, FwdIter1 last, FwdIter2 dest,
         T init)
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter1>::value),
-            "Requires at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<FwdIter2>::value ||
-                hpx::traits::is_forward_iterator<FwdIter2>::value),
-            "Requires at least output iterator.");
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter1>::value),
             "Requires at least forward iterator.");
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter2>::value),
             "Requires at least forward iterator.");
-#endif
 
         typedef hpx::traits::is_segmented_iterator<FwdIter1> is_segmented;
 

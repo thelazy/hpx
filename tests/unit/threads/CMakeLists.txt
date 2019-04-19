@@ -6,8 +6,11 @@
 set(tests
     lockfree_fifo
     resource_manager
+    schedule_last
     set_thread_state
     stack_check
+    error_callback
+    start_stop_callbacks
     thread
     thread_affinity
     thread_id
@@ -20,17 +23,14 @@ set(tests
 
 if(HPX_WITH_THREAD_STACKOVERFLOW_DETECTION)
   set(tests ${tests} thread_stacksize_overflow)
+  set(tests ${tests} thread_stacksize_overflow_v2)
 endif()
 
 if(HPX_WITH_THREAD_LOCAL_STORAGE)
   set(tests ${tests} tss)
 endif()
 
-if((NOT MSVC) OR HPX_WITH_VCPKG)
-  set(lockfree_fifo_FLAGS NOLIBS DEPENDENCIES ${Boost_LIBRARIES})
-else()
-  set(lockfree_fifo_FLAGS NOLIBS)
-endif()
+set(lockfree_fifo_FLAGS NOLIBS DEPENDENCIES ${Boost_LIBRARIES} hpx.pp)
 
 set(resource_manager_PARAMETERS THREADS_PER_LOCALITY 4)
 
@@ -76,13 +76,18 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.unit.threads.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()
 
-set_property(TARGET lockfree_fifo_test_exe APPEND
+set_property(TARGET lockfree_fifo_test APPEND
     PROPERTY COMPILE_DEFINITIONS "HPX_NO_VERSION_CHECK")
+
+target_include_directories(lockfree_fifo_test PRIVATE ${HPX_SOURCE_DIR})
 
 if(HPX_WITH_THREAD_STACKOVERFLOW_DETECTION)
   set_tests_properties(tests.unit.threads.thread_stacksize_overflow PROPERTIES
+    PASS_REGULAR_EXPRESSION "Stack overflow in coroutine at address 0x[0-9a-fA-F]*")
+
+  set_tests_properties(tests.unit.threads.thread_stacksize_overflow_v2 PROPERTIES
     PASS_REGULAR_EXPRESSION "Stack overflow in coroutine at address 0x[0-9a-fA-F]*")
 endif()

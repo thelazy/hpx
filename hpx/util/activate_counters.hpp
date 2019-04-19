@@ -8,7 +8,7 @@
 
 #include <hpx/config.hpp>
 #include <hpx/lcos/future.hpp>
-#include <hpx/performance_counters/counters.hpp>
+#include <hpx/performance_counters/counters_fwd.hpp>
 
 #include <cstddef>
 #include <string>
@@ -48,22 +48,6 @@ namespace hpx { namespace util
 
         sync_counter_values_type evaluate_counters(launch::sync_policy,
             bool reset = false, error_code& ec = throws);
-
-#if defined(HPX_HAVE_ASYNC_FUNCTION_COMPATIBILITY)
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        async_counter_values_type evaluate_counters_async(bool reset = false,
-            error_code& ec = throws)
-        {
-            return evaluate_counters(launch::async, reset, ec);
-        }
-
-        HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-        sync_counter_values_type evaluate_counters_sync(bool reset = false,
-            error_code& ec = throws)
-        {
-            return evaluate_counters(launch::sync, reset, ec);
-        }
-#endif
 
         std::string name(std::size_t i) const
         {

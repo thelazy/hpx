@@ -1,4 +1,4 @@
-//  Copyright (c) 2014-2016 Hartmut Kaiser
+//  Copyright (c) 2014-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -134,8 +134,9 @@ namespace hpx { namespace components
             }
 
             return f.then(hpx::launch::sync,
-                [id](hpx::future<std::vector<hpx::id_type> > && f)
-                    -> std::vector<bulk_locality_result>
+                [HPX_CAPTURE_MOVE(id)](
+                    hpx::future<std::vector<hpx::id_type> > && f
+                ) -> std::vector<bulk_locality_result>
                 {
                     std::vector<bulk_locality_result> result;
                     result.emplace_back(id, f.get());
@@ -146,11 +147,16 @@ namespace hpx { namespace components
         /// \note This function is part of the invocation policy implemented by
         ///       this class
         ///
-        template <typename Action, typename ...Ts>
-        hpx::future<
-            typename traits::promise_local_result<
+        template <typename Action>
+        struct async_result
+        {
+            using type = hpx::future<typename traits::promise_local_result<
                 typename hpx::traits::extract_action<Action>::remote_result_type
-            >::type>
+            >::type>;
+        };
+
+        template <typename Action, typename ...Ts>
+        typename async_result<Action>::type
         async(launch policy, Ts&&... vs) const
         {
             if (!id_)
@@ -166,10 +172,7 @@ namespace hpx { namespace components
         ///       this class
         ///
         template <typename Action, typename Callback, typename ...Ts>
-        hpx::future<
-            typename traits::promise_local_result<
-                typename hpx::traits::extract_action<Action>::remote_result_type
-            >::type>
+        typename async_result<Action>::type
         async_cb(launch policy, Callback&& cb, Ts&&... vs) const
         {
             if (!id_)

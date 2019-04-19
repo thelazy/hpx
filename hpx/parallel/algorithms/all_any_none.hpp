@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -72,22 +72,22 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 util::cancellation_token<> tok;
                 auto f1 =
-                    [op, tok, policy, proj](
-                        FwdIter part_begin, std::size_t part_count
-                    ) mutable -> bool
-                    {
-                        HPX_UNUSED(policy);
-
-                        util::loop_n<ExPolicy>(
-                            part_begin, part_count, tok,
-                            [&op, &tok, &proj](FwdIter const& curr)
+                    [HPX_CAPTURE_FORWARD(op), tok,
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](FwdIter part_begin, std::size_t part_count) mutable -> bool
+                {
+                    util::loop_n<ExPolicy>(part_begin, part_count, tok,
+                        [&op, &tok, &proj](FwdIter const& curr)
+                        {
+                            if (hpx::util::invoke(op,
+                                    hpx::util::invoke(proj, *curr)))
                             {
-                                if (op(proj(*curr)))
-                                    tok.cancel();
-                            });
+                                tok.cancel();
+                            }
+                        });
 
-                        return !tok.was_cancelled();
-                    };
+                    return !tok.was_cancelled();
+                };
 
                 return util::partitioner<ExPolicy, bool>::call(
                     std::forward<ExPolicy>(policy),
@@ -104,6 +104,28 @@ namespace hpx { namespace parallel { inline namespace v1
                     });
             }
         };
+
+        template <typename ExPolicy, typename FwdIter, typename F, typename Proj>
+        typename util::detail::algorithm_result<ExPolicy, bool>::type
+        none_of_(ExPolicy && policy, FwdIter first, FwdIter last,
+            F && f, Proj && proj, std::false_type)
+        {
+            static_assert(
+                (hpx::traits::is_forward_iterator<FwdIter>::value),
+                "Requires at least forward iterator.");
+
+            typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
+
+            return detail::none_of().call(
+                std::forward<ExPolicy>(policy), is_seq(),
+                first, last, std::forward<F>(f), std::forward<Proj>(proj));
+
+        }
+
+        template <typename ExPolicy, typename FwdIter, typename F, typename Proj>
+        typename util::detail::algorithm_result<ExPolicy, bool>::type
+        none_of_(ExPolicy && policy, FwdIter first, FwdIter last,
+            F && f, Proj && proj, std::true_type);
         /// \endcond
     }
 
@@ -184,26 +206,11 @@ namespace hpx { namespace parallel { inline namespace v1
     none_of(ExPolicy && policy, FwdIter first, FwdIter last, F && f,
         Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter>::value),
-            "Requires at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter>::value
-            > is_seq;
-#else
-        static_assert(
-            (hpx::traits::is_forward_iterator<FwdIter>::value),
-            "Requires at least forward iterator.");
-
-        typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
-
-        return detail::none_of().call(
-            std::forward<ExPolicy>(policy), is_seq(),
-            first, last, std::forward<F>(f), std::forward<Proj>(proj));
+        typedef hpx::traits::is_segmented_iterator<FwdIter> is_segmented;
+        return detail::none_of_(
+            std::forward<ExPolicy>(policy),
+            first, last, std::forward<F>(f), std::forward<Proj>(proj),
+            is_segmented());
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -247,18 +254,19 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 util::cancellation_token<> tok;
                 auto f1 =
-                    [op, tok, policy, proj](
-                        FwdIter part_begin, std::size_t part_count
-                    ) mutable -> bool
+                    [HPX_CAPTURE_FORWARD(op), tok,
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](FwdIter part_begin, std::size_t part_count) mutable -> bool
                     {
-                        HPX_UNUSED(policy);
-
                         util::loop_n<ExPolicy>(
                             part_begin, part_count, tok,
                             [&op, &tok, &proj](FwdIter const& curr)
                             {
-                                if (op(proj(*curr)))
+                                if (hpx::util::invoke(op,
+                                        hpx::util::invoke(proj, *curr)))
+                                {
                                     tok.cancel();
+                                }
                             });
 
                         return tok.was_cancelled();
@@ -279,6 +287,28 @@ namespace hpx { namespace parallel { inline namespace v1
                     });
             }
         };
+
+        template <typename ExPolicy, typename FwdIter, typename F, typename Proj>
+        typename util::detail::algorithm_result<ExPolicy, bool>::type
+        any_of_(ExPolicy && policy, FwdIter first, FwdIter last,
+            F && f, Proj && proj, std::false_type)
+        {
+            static_assert(
+                (hpx::traits::is_forward_iterator<FwdIter>::value),
+                "Requires at least forward iterator.");
+
+            typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
+
+            return detail::any_of().call(
+                std::forward<ExPolicy>(policy), is_seq(),
+                first, last, std::forward<F>(f), std::forward<Proj>(proj));
+
+        }
+
+        template <typename ExPolicy, typename FwdIter, typename F, typename Proj>
+        typename util::detail::algorithm_result<ExPolicy, bool>::type
+        any_of_(ExPolicy && policy, FwdIter first, FwdIter last,
+            F && f, Proj && proj, std::true_type);
         /// \endcond
     }
 
@@ -359,26 +389,11 @@ namespace hpx { namespace parallel { inline namespace v1
     any_of(ExPolicy && policy, FwdIter first, FwdIter last, F && f,
         Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter>::value),
-            "Requires at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter>::value
-            > is_seq;
-#else
-        static_assert(
-            (hpx::traits::is_forward_iterator<FwdIter>::value),
-            "Requires at least forward iterator.");
-
-        typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
-
-        return detail::any_of().call(
-            std::forward<ExPolicy>(policy), is_seq(),
-            first, last, std::forward<F>(f), std::forward<Proj>(proj));
+        typedef hpx::traits::is_segmented_iterator<FwdIter> is_segmented;
+        return detail::any_of_(
+            std::forward<ExPolicy>(policy),
+            first, last, std::forward<F>(f), std::forward<Proj>(proj),
+            is_segmented());
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -422,18 +437,19 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 util::cancellation_token<> tok;
                 auto f1 =
-                    [op, tok, policy, proj](
-                        FwdIter part_begin, std::size_t part_count
-                    ) mutable -> bool
+                    [HPX_CAPTURE_FORWARD(op), tok,
+                        HPX_CAPTURE_FORWARD(proj)
+                    ](FwdIter part_begin, std::size_t part_count) mutable -> bool
                     {
-                        HPX_UNUSED(policy);
-
                         util::loop_n<ExPolicy>(
                             part_begin, part_count, tok,
                             [&op, &tok, &proj](FwdIter const& curr)
                             {
-                                if (!op(proj(*curr)))
+                                if (!hpx::util::invoke(op,
+                                        hpx::util::invoke(proj, *curr)))
+                                {
                                     tok.cancel();
+                                }
                             });
 
                         return !tok.was_cancelled();
@@ -454,6 +470,27 @@ namespace hpx { namespace parallel { inline namespace v1
                     });
             }
         };
+
+        template <typename ExPolicy, typename FwdIter, typename F, typename Proj>
+        typename util::detail::algorithm_result<ExPolicy, bool>::type
+        all_of_(ExPolicy && policy, FwdIter first, FwdIter last,
+            F && f, Proj && proj, std::false_type)
+        {
+            static_assert(
+                (hpx::traits::is_forward_iterator<FwdIter>::value),
+                "Requires at least forward iterator.");
+
+            typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
+
+            return detail::all_of().call(
+                std::forward<ExPolicy>(policy), is_seq(),
+                first, last, std::forward<F>(f), std::forward<Proj>(proj));
+        }
+
+        template <typename ExPolicy, typename FwdIter, typename F, typename Proj>
+        typename util::detail::algorithm_result<ExPolicy, bool>::type
+        all_of_(ExPolicy && policy, FwdIter first, FwdIter last,
+            F && f, Proj && proj, std::true_type);
         /// \endcond
     }
 
@@ -534,26 +571,11 @@ namespace hpx { namespace parallel { inline namespace v1
     all_of(ExPolicy && policy, FwdIter first, FwdIter last, F && f,
         Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter>::value),
-            "Requires at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter>::value
-            > is_seq;
-#else
-        static_assert(
-            (hpx::traits::is_forward_iterator<FwdIter>::value),
-            "Requires at least forward iterator.");
-
-        typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
-
-        return detail::all_of().call(
-            std::forward<ExPolicy>(policy), is_seq(),
-            first, last, std::forward<F>(f), std::forward<Proj>(proj));
+        typedef hpx::traits::is_segmented_iterator<FwdIter> is_segmented;
+        return detail::all_of_(
+            std::forward<ExPolicy>(policy),
+            first, last, std::forward<F>(f), std::forward<Proj>(proj),
+            is_segmented());
     }
 }}}
 

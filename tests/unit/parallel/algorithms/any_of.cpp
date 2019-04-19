@@ -111,26 +111,6 @@ void test_any_of()
 
     test_any_of_async(execution::seq(execution::task), IteratorTag(), proj());
     test_any_of_async(execution::par(execution::task), IteratorTag(), proj());
-
-#if defined(HPX_HAVE_GENERIC_EXECUTION_POLICY)
-    test_any_of(execution_policy(execution::seq), IteratorTag());
-    test_any_of(execution_policy(execution::par), IteratorTag());
-    test_any_of(execution_policy(execution::par_unseq), IteratorTag());
-
-    test_any_of(execution_policy(execution::seq), IteratorTag(), proj());
-    test_any_of(execution_policy(execution::par), IteratorTag(), proj());
-    test_any_of(execution_policy(execution::par_unseq), IteratorTag(), proj());
-
-    test_any_of(execution_policy(execution::seq(execution::task)),
-        IteratorTag());
-    test_any_of(execution_policy(execution::par(execution::task)),
-        IteratorTag());
-
-    test_any_of(execution_policy(execution::seq(execution::task)),
-        IteratorTag(), proj());
-    test_any_of(execution_policy(execution::par(execution::task)),
-        IteratorTag()), proj();
-#endif
 }
 
 // template <typename IteratorTag>
@@ -161,9 +141,6 @@ void any_of_test()
 {
     test_any_of<std::random_access_iterator_tag>();
     test_any_of<std::forward_iterator_tag>();
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-    test_any_of<std::input_iterator_tag>();
-#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -255,25 +232,12 @@ void test_any_of_exception()
 
     test_any_of_exception_async(execution::seq(execution::task), IteratorTag());
     test_any_of_exception_async(execution::par(execution::task), IteratorTag());
-
-#if defined(HPX_HAVE_GENERIC_EXECUTION_POLICY)
-    test_any_of_exception(execution_policy(execution::seq), IteratorTag());
-    test_any_of_exception(execution_policy(execution::par), IteratorTag());
-
-    test_any_of_exception(execution_policy(execution::seq(execution::task)),
-        IteratorTag());
-    test_any_of_exception(execution_policy(execution::par(execution::task)),
-        IteratorTag());
-#endif
 }
 
 void any_of_exception_test()
 {
     test_any_of_exception<std::random_access_iterator_tag>();
     test_any_of_exception<std::forward_iterator_tag>();
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-    test_any_of_exception<std::input_iterator_tag>();
-#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -363,37 +327,17 @@ void test_any_of_bad_alloc()
 
     test_any_of_bad_alloc_async(execution::seq(execution::task), IteratorTag());
     test_any_of_bad_alloc_async(execution::par(execution::task), IteratorTag());
-
-#if defined(HPX_HAVE_GENERIC_EXECUTION_POLICY)
-    test_any_of_bad_alloc(execution_policy(execution::seq), IteratorTag());
-    test_any_of_bad_alloc(execution_policy(execution::par), IteratorTag());
-
-    test_any_of_bad_alloc(execution_policy(execution::seq(execution::task)),
-        IteratorTag());
-    test_any_of_bad_alloc(execution_policy(execution::par(execution::task)),
-        IteratorTag());
-#endif
 }
 
 void any_of_bad_alloc_test()
 {
     test_any_of_bad_alloc<std::random_access_iterator_tag>();
     test_any_of_bad_alloc<std::forward_iterator_tag>();
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-    test_any_of_bad_alloc<std::input_iterator_tag>();
-#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 int hpx_main(boost::program_options::variables_map& vm)
 {
-    unsigned int seed = (unsigned int)std::time(nullptr);
-    if (vm.count("seed"))
-        seed = vm["seed"].as<unsigned int>();
-
-    std::cout << "using seed: " << seed << std::endl;
-    std::srand(seed);
-
     any_of_test();
     any_of_exception_test();
     any_of_bad_alloc_test();
@@ -406,11 +350,6 @@ int main(int argc, char* argv[])
     using namespace boost::program_options;
     options_description desc_commandline(
         "Usage: " HPX_APPLICATION_STRING " [options]");
-
-    desc_commandline.add_options()
-        ("seed,s", value<unsigned int>(),
-        "the random number generator seed to use for this run")
-        ;
 
     // By default this test should run on all available cores
     std::vector<std::string> const cfg = {

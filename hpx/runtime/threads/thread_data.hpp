@@ -21,16 +21,19 @@
 #include <hpx/util/atomic_count.hpp>
 #include <hpx/util/backtrace.hpp>
 #include <hpx/util/function.hpp>
-#include <hpx/util/lockfree/freelist.hpp>
 #include <hpx/util/logging.hpp>
 #include <hpx/util/spinlock_pool.hpp>
 #include <hpx/util/thread_description.hpp>
+#if defined(HPX_HAVE_APEX)
+#include <hpx/util/apex.hpp>
+#endif
 
 #include <boost/intrusive_ptr.hpp>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <forward_list>
 #include <stack>
 #include <string>
 #include <utility>
@@ -94,26 +97,6 @@ namespace hpx { namespace threads
         struct tag {};
         typedef util::spinlock_pool<tag> mutex_type;
 
-        typedef boost::lockfree::caching_freelist<thread_data> pool_type;
-
-        static boost::intrusive_ptr<thread_data> create(
-            thread_init_data& init_data, pool_type& pool,
-            thread_state_enum newstate)
-        {
-            thread_data* ret = pool.allocate();
-            if (ret == nullptr)
-            {
-                HPX_THROW_EXCEPTION(out_of_memory,
-                    "thread_data::operator new",
-                    "could not allocate memory for thread_data");
-            }
-#ifdef HPX_DEBUG_THREAD_POOL
-            using namespace std;    // some systems have memset in namespace std
-            memset (ret, initial_value, sizeof(thread_data));
-#endif
-            return new (ret) thread_data(init_data, &pool, newstate);
-        }
-
         ~thread_data()
         {
             free_thread_exit_callbacks();
@@ -131,9 +114,10 @@ namespace hpx { namespace threads
         /// \note           This function will be seldom used directly. Most of
         ///                 the time the state of a thread will be retrieved
         ///                 by using the function \a threadmanager#get_state.
-        thread_state get_state() const
+        thread_state get_state(
+            std::memory_order order = std::memory_order_acquire) const
         {
-            return current_state_.load(std::memory_order_acquire);
+            return current_state_.load(order);
         }
 
         /// The set_state function changes the state of this thread instance.
@@ -149,10 +133,11 @@ namespace hpx { namespace threads
         ///                 scheduling status \a threadmanager#set_state should
         ///                 be used.
         thread_state set_state(thread_state_enum state,
-            thread_state_ex_enum state_ex = wait_unknown)
+            thread_state_ex_enum state_ex = wait_unknown,
+            std::memory_order load_order = std::memory_order_acquire,
+            std::memory_order exchange_order = std::memory_order_seq_cst)
         {
-            thread_state prev_state =
-                current_state_.load(std::memory_order_acquire);
+            thread_state prev_state = current_state_.load(load_order);
 
             for (;;) {
                 thread_state tmp = prev_state;
@@ -166,7 +151,7 @@ namespace hpx { namespace threads
                     state_ex = tmp.state_ex();
 
                 if (HPX_LIKELY(current_state_.compare_exchange_strong(tmp,
-                        thread_state(state, state_ex, tag))))
+                        thread_state(state, state_ex, tag), exchange_order)))
                 {
                     return prev_state;
                 }
@@ -176,7 +161,8 @@ namespace hpx { namespace threads
         }
 
         bool set_state_tagged(thread_state_enum newstate,
-            thread_state& prev_state, thread_state& new_tagged_state)
+            thread_state& prev_state, thread_state& new_tagged_state,
+            std::memory_order exchange_order = std::memory_order_seq_cst)
         {
             thread_state tmp = prev_state;
             thread_state_ex_enum state_ex = tmp.state_ex();
@@ -184,8 +170,11 @@ namespace hpx { namespace threads
             new_tagged_state = thread_state(newstate, state_ex,
                 prev_state.tag() + 1);
 
-            if (!current_state_.compare_exchange_strong(tmp, new_tagged_state))
+            if (!current_state_.compare_exchange_strong(
+                    tmp, new_tagged_state, exchange_order))
+            {
                 return false;
+            }
 
             prev_state = tmp;
             return true;
@@ -212,7 +201,9 @@ namespace hpx { namespace threads
         ///
         /// \returns This function returns \a true if the state has been
         ///          changed successfully
-        bool restore_state(thread_state new_state, thread_state old_state)
+        bool restore_state(thread_state new_state, thread_state old_state,
+            std::memory_order load_order = std::memory_order_relaxed,
+            std::memory_order load_exchange = std::memory_order_seq_cst)
         {
             // ABA prevention for state only (not for state_ex)
             std::int64_t tag = old_state.tag();
@@ -221,16 +212,18 @@ namespace hpx { namespace threads
 
             // ignore the state_ex while compare-exchanging
             thread_state_ex_enum state_ex =
-                current_state_.load(std::memory_order_relaxed).state_ex();
+                current_state_.load(load_order).state_ex();
 
             thread_state old_tmp(old_state.state(), state_ex, old_state.tag());
             thread_state new_tmp(new_state.state(), state_ex, tag);
 
-            return current_state_.compare_exchange_strong(old_tmp, new_tmp);
+            return current_state_.compare_exchange_strong(
+                old_tmp, new_tmp, load_exchange);
         }
 
         bool restore_state(thread_state_enum new_state,
-            thread_state_ex_enum state_ex, thread_state old_state)
+            thread_state_ex_enum state_ex, thread_state old_state,
+            std::memory_order load_exchange = std::memory_order_seq_cst)
         {
             // ABA prevention for state only (not for state_ex)
             std::int64_t tag = old_state.tag();
@@ -238,7 +231,7 @@ namespace hpx { namespace threads
                 ++tag;
 
             return current_state_.compare_exchange_strong(old_state,
-                thread_state(new_state, state_ex, tag));
+                thread_state(new_state, state_ex, tag), load_exchange);
         }
 
     private:
@@ -333,9 +326,9 @@ namespace hpx { namespace threads
         }
 
         /// Return the thread id of the parent thread
-        thread_id_repr_type get_parent_thread_id() const
+        thread_id_type get_parent_thread_id() const
         {
-            return threads::invalid_thread_id_repr;
+            return threads::invalid_thread_id;
         }
 
         /// Return the phase of the parent thread
@@ -351,7 +344,7 @@ namespace hpx { namespace threads
         }
 
         /// Return the thread id of the parent thread
-        thread_id_repr_type get_parent_thread_id() const
+        thread_id_type get_parent_thread_id() const
         {
             return parent_thread_id_;
         }
@@ -503,9 +496,10 @@ namespace hpx { namespace threads
             return stacksize_;
         }
 
-        pool_type* get_pool()
+        template <typename ThreadQueue>
+        ThreadQueue& get_queue()
         {
-            return pool_;
+            return *static_cast<ThreadQueue *>(queue_);
         }
 
         /// \brief Execute the thread function
@@ -516,16 +510,14 @@ namespace hpx { namespace threads
         ///                 thread's scheduling status.
         coroutine_type::result_type operator()()
         {
-            HPX_ASSERT(this == coroutine_.get_thread_id());
+            HPX_ASSERT(this == coroutine_.get_thread_id().get());
             return coroutine_(set_state_ex(wait_signaled));
         }
 
         thread_id_type get_thread_id() const
         {
-            HPX_ASSERT(this == coroutine_.get_thread_id());
-            return thread_id_type(
-                    reinterpret_cast<thread_data*>(coroutine_.get_thread_id())
-                );
+            HPX_ASSERT(this == coroutine_.get_thread_id().get());
+            return coroutine_.get_thread_id();
         }
 
         std::size_t get_thread_phase() const
@@ -548,9 +540,13 @@ namespace hpx { namespace threads
         }
 
 #if defined(HPX_HAVE_APEX)
-        void** get_apex_data() const
+        apex_task_wrapper get_apex_data() const
         {
             return coroutine_.get_apex_data();
+        }
+        void set_apex_data(apex_task_wrapper data)
+        {
+            return coroutine_.set_apex_data(data);
         }
 #endif
 
@@ -563,7 +559,7 @@ namespace hpx { namespace threads
 
             rebind_base(init_data, newstate);
 
-            coroutine_.rebind(std::move(init_data.func), this_());
+            coroutine_.rebind(std::move(init_data.func), thread_id_type(this));
 
             HPX_ASSERT(init_data.stacksize != 0);
             HPX_ASSERT(coroutine_.is_ready());
@@ -572,12 +568,9 @@ namespace hpx { namespace threads
         /// This function will be called when the thread is about to be deleted
         //virtual void reset() {}
 
-        friend HPX_EXPORT void intrusive_ptr_add_ref(thread_data* p);
-        friend HPX_EXPORT void intrusive_ptr_release(thread_data* p);
-
         /// Construct a new \a thread
         thread_data(thread_init_data& init_data,
-            pool_type* pool, thread_state_enum newstate)
+            void* queue, thread_state_enum newstate)
           : current_state_(thread_state(newstate, wait_signaled)),
 #ifdef HPX_HAVE_THREAD_TARGET_ADDRESS
             component_id_(init_data.lva),
@@ -602,11 +595,10 @@ namespace hpx { namespace threads
             enabled_interrupt_(true),
             ran_exit_funcs_(false),
             scheduler_base_(init_data.scheduler_base),
-            count_(0),
             stacksize_(init_data.stacksize),
             coroutine_(std::move(init_data.func),
-                this_(), init_data.stacksize),
-            pool_(pool)
+                thread_id_type(this_()), init_data.stacksize),
+            queue_(queue)
         {
             LTM_(debug) << "thread::thread(" << this << "), description("
                         << get_description() << ")";
@@ -614,16 +606,19 @@ namespace hpx { namespace threads
 #ifdef HPX_HAVE_THREAD_PARENT_REFERENCE
             // store the thread id of the parent thread, mainly for debugging
             // purposes
-            if (nullptr == parent_thread_id_) {
+            if (parent_thread_id_) {
                 thread_self* self = get_self_ptr();
                 if (self)
                 {
-                    parent_thread_id_ = threads::get_self_id().get();
+                    parent_thread_id_ = threads::get_self_id();
                     parent_thread_phase_ = self->get_thread_phase();
                 }
             }
             if (0 == parent_locality_id_)
                 parent_locality_id_ = get_locality_id();
+#endif
+#if defined(HPX_HAVE_APEX)
+            set_apex_data(init_data.apex_data);
 #endif
             HPX_ASSERT(init_data.stacksize != 0);
             HPX_ASSERT(coroutine_.is_ready());
@@ -673,12 +668,15 @@ namespace hpx { namespace threads
                 thread_self* self = get_self_ptr();
                 if (self)
                 {
-                    parent_thread_id_ = threads::get_self_id().get();
+                    parent_thread_id_ = threads::get_self_id();
                     parent_thread_phase_ = self->get_thread_phase();
                 }
             }
             if (0 == parent_locality_id_)
                 parent_locality_id_ = get_locality_id();
+#endif
+#if defined(HPX_HAVE_APEX)
+            set_apex_data(init_data.apex_data);
 #endif
         }
 
@@ -697,7 +695,7 @@ namespace hpx { namespace threads
 
 #ifdef HPX_HAVE_THREAD_PARENT_REFERENCE
         std::uint32_t parent_locality_id_;
-        thread_id_repr_type parent_thread_id_;
+        thread_id_type parent_thread_id_;
         std::size_t parent_thread_phase_;
 #endif
 
@@ -721,22 +719,16 @@ namespace hpx { namespace threads
         bool ran_exit_funcs_;
 
         // Singly linked list (heap-allocated)
-        // FIXME: replace with forward_list eventually.
-        std::deque<util::function_nonser<void()> > exit_funcs_;
+        std::forward_list<util::function_nonser<void()> > exit_funcs_;
 
         // reference to scheduler which created/manages this thread
         policies::scheduler_base* scheduler_base_;
 
-        // reference count
-        util::atomic_count count_;
-
         std::ptrdiff_t stacksize_;
 
         coroutine_type coroutine_;
-        pool_type* pool_;
+        void* queue_;
     };
-
-    typedef thread_data::pool_type thread_pool;
 }}
 
 #include <hpx/config/warnings_suffix.hpp>

@@ -240,6 +240,7 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 // Not reachable.
                 HPX_ASSERT(false);
+                return;
             }
 
             fut.get();
@@ -248,23 +249,51 @@ namespace hpx { namespace parallel { inline namespace v1
         template <typename ExPolicy,
             typename RandIter1, typename RandIter2, typename RandIter3,
             typename Comp, typename Proj1, typename Proj2>
-        hpx::util::tuple<RandIter1, RandIter2, RandIter3>
+        hpx::future<hpx::util::tuple<RandIter1, RandIter2, RandIter3>>
         parallel_merge(ExPolicy && policy,
             RandIter1 first1, RandIter1 last1,
             RandIter2 first2, RandIter2 last2,
             RandIter3 dest, Comp && comp,
             Proj1 && proj1, Proj2 && proj2)
         {
-            parallel_merge_helper(std::forward<ExPolicy>(policy),
-                first1, last1, first2, last2, dest,
-                std::forward<Comp>(comp),
-                std::forward<Proj1>(proj1),
-                std::forward<Proj2>(proj2),
-                false,
-                lower_bound_helper());
+            typedef hpx::util::tuple<RandIter1, RandIter2, RandIter3>
+                result_type;
 
-            return hpx::util::make_tuple(last1, last2,
-                dest + (last1 - first1) + (last2 - first2));
+            typedef typename std::remove_reference<ExPolicy>::type ExPolicy_;
+            typedef typename std::remove_reference<Comp>::type Comp_;
+            typedef typename std::remove_reference<Proj1>::type Proj1_;
+            typedef typename std::remove_reference<Proj2>::type Proj2_;
+
+            hpx::future<result_type> f = execution::async_execute(
+                policy.executor(),
+                std::bind(
+                    [first1, last1, first2, last2, dest](
+                        ExPolicy_& policy, Comp_& comp,
+                        Proj1_& proj1, Proj2_& proj2) -> result_type
+                    {
+                        try {
+                            parallel_merge_helper(
+                                std::move(policy), first1, last1, first2, last2, dest,
+                                std::move(comp), std::move(proj1), std::move(proj2),
+                                false, lower_bound_helper());
+
+                            return hpx::util::make_tuple(last1, last2,
+                                dest + (last1 - first1) + (last2 - first2));
+                        }
+                        catch (...) {
+                            util::detail::handle_local_exceptions<ExPolicy>::call(
+                                std::current_exception());
+                        }
+
+                        // Not reachable.
+                        HPX_ASSERT(false);
+                    },
+                    std::forward<ExPolicy>(policy),
+                    std::forward<Comp>(comp),
+                    std::forward<Proj1>(proj1),
+                    std::forward<Proj2>(proj2)));
+
+            return f;
         }
 
         template <typename IterTuple>
@@ -450,25 +479,6 @@ namespace hpx { namespace parallel { inline namespace v1
         RandIter3 dest, Comp && comp = Comp(),
         Proj1 && proj1 = Proj1(), Proj2 && proj2 = Proj2())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<RandIter1>::value),
-            "Required at least input iterator.");
-        static_assert(
-            (hpx::traits::is_input_iterator<RandIter2>::value),
-            "Required at least input iterator.");
-        static_assert(
-            (hpx::traits::is_output_iterator<RandIter3>::value ||
-                hpx::traits::is_random_access_iterator<RandIter3>::value),
-            "Requires at least output iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_random_access_iterator<RandIter1>::value ||
-               !hpx::traits::is_random_access_iterator<RandIter2>::value ||
-               !hpx::traits::is_random_access_iterator<RandIter3>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_random_access_iterator<RandIter1>::value),
             "Required at least random access iterator.");
@@ -480,8 +490,6 @@ namespace hpx { namespace parallel { inline namespace v1
             "Requires at least random access iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
-
         typedef hpx::util::tuple<RandIter1, RandIter2, RandIter3> result_type;
 
         return hpx::util::make_tagged_tuple<tag::in1, tag::in2, tag::out>(
@@ -516,7 +524,7 @@ namespace hpx { namespace parallel { inline namespace v1
         template <typename ExPolicy, typename RandIter,
             typename Comp, typename Proj>
         void
-        parallel_inplace_merge_helper(ExPolicy policy,
+        parallel_inplace_merge_helper(ExPolicy && policy,
             RandIter first, RandIter middle, RandIter last,
             Comp && comp, Proj && proj)
         {
@@ -530,7 +538,8 @@ namespace hpx { namespace parallel { inline namespace v1
             //   if data size is smaller than threshold.
             if (left_size + right_size <= threshold)
             {
-                sequential_inplace_merge(first, middle, last, comp, proj);
+                sequential_inplace_merge(first, middle, last,
+                    std::forward<Comp>(comp), std::forward<Proj>(proj));
                 return;
             }
 
@@ -539,7 +548,7 @@ namespace hpx { namespace parallel { inline namespace v1
                 // Means that always 'pivot' < 'middle'.
                 HPX_ASSERT(left_size >= 3ul);
 
-                // Select pivot in leftside range.
+                // Select pivot in left-side range.
                 RandIter pivot = first + left_size / 2;
                 RandIter boundary = lower_bound_helper::call(
                     middle, last, hpx::util::invoke(proj, *pivot), comp, proj);
@@ -558,17 +567,15 @@ namespace hpx { namespace parallel { inline namespace v1
                     policy.executor(),
                     [&]() -> void
                     {
-                        // Process the range which is leftside of 'target'.
+                        // Process the range which is left-side of 'target'.
                         parallel_inplace_merge_helper(policy,
-                            first, pivot, target,
-                            comp, proj);
+                            first, pivot, target, comp, proj);
                     });
 
                 try {
-                    // Process the range which is rightside of 'target'.
+                    // Process the range which is right-side of 'target'.
                     parallel_inplace_merge_helper(policy,
-                        target + 1, boundary, last,
-                        comp, proj);
+                        target + 1, boundary, last, comp, proj);
                 }
                 catch (...) {
                     fut.wait();
@@ -585,15 +592,15 @@ namespace hpx { namespace parallel { inline namespace v1
                     // Not reachable.
                     HPX_ASSERT(false);
                 }
-
-                fut.get();
+                if (fut.valid()) // NOLINT
+                    fut.get();
             }
             else /* left_size < right_size */
             {
                 // Means that always 'pivot' < 'last'.
                 HPX_ASSERT(right_size >= 3ul);
 
-                // Select pivot in rightside range.
+                // Select pivot in right-side range.
                 RandIter pivot = middle + right_size / 2;
                 RandIter boundary = upper_bound_helper::call(
                     first, middle, hpx::util::invoke(proj, *pivot), comp, proj);
@@ -612,17 +619,15 @@ namespace hpx { namespace parallel { inline namespace v1
                     policy.executor(),
                     [&]() -> void
                     {
-                        // Process the range which is leftside of 'target'.
+                        // Process the range which is left-side of 'target'.
                         parallel_inplace_merge_helper(policy,
-                            first, boundary, target,
-                            comp, proj);
+                            first, boundary, target, comp, proj);
                     });
 
                 try {
-                    // Process the range which is rightside of 'target'.
+                    // Process the range which is right-side of 'target'.
                     parallel_inplace_merge_helper(policy,
-                        target + 1, pivot + 1, last,
-                        comp, proj);
+                        target + 1, pivot + 1, last, comp, proj);
                 }
                 catch (...) {
                     fut.wait();
@@ -640,24 +645,28 @@ namespace hpx { namespace parallel { inline namespace v1
                     HPX_ASSERT(false);
                 }
 
-                fut.get();
+                if (fut.valid()) // NOLINT
+                    fut.get();
             }
         }
 
-        template <typename ExPolicy, typename RandIter,
-            typename Comp, typename Proj>
+        template <typename ExPolicy, typename RandIter, typename Comp,
+            typename Proj>
         inline hpx::future<RandIter>
-        parallel_inplace_merge(ExPolicy policy,
-            RandIter first, RandIter middle, RandIter last,
-            Comp && comp, Proj && proj)
+        parallel_inplace_merge(ExPolicy && policy,
+            RandIter first, RandIter middle, RandIter last, Comp && comp,
+            Proj && proj)
         {
-            hpx::future<RandIter> f = execution::async_execute(
+            return execution::async_execute(
                 policy.executor(),
-                [=]() mutable -> RandIter
+                [policy, first, middle, last, HPX_CAPTURE_FORWARD(comp),
+                    HPX_CAPTURE_FORWARD(proj)
+                ]() mutable -> RandIter
                 {
                     try {
                         parallel_inplace_merge_helper(
-                            policy, first, middle, last, comp, proj);
+                            policy, first, middle, last,
+                            std::move(comp), std::move(proj));
                         return last;
                     }
                     catch (...) {
@@ -668,8 +677,6 @@ namespace hpx { namespace parallel { inline namespace v1
                     // Not reachable.
                     HPX_ASSERT(false);
                 });
-
-            return f;
         }
 
         template <typename Iter>
@@ -812,22 +819,11 @@ namespace hpx { namespace parallel { inline namespace v1
         RandIter first, RandIter middle, RandIter last,
         Comp && comp = Comp(), Proj && proj = Proj())
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_bidirectional_iterator<RandIter>::value),
-            "Required at least bidirectional iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_random_access_iterator<RandIter>::value ||
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_random_access_iterator<RandIter>::value),
             "Required at least random access iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return detail::inplace_merge<RandIter>().call(
             std::forward<ExPolicy>(policy), is_seq(),

@@ -83,6 +83,11 @@ set(tests
     partition_copy
     reduce_
     reduce_by_key
+    remove
+    remove1
+    remove2
+    remove_if
+    remove_if1
     remove_copy
     remove_copy_if
     replace
@@ -127,22 +132,6 @@ set(tests
     unique_copy
    )
 
-if(HPX_WITH_EXECUTOR_COMPATIBILITY)
-  set(tests ${tests}
-      foreach_executors_v1
-      foreach_prefetching_executors_v1
-      inclusive_scan_executors_v1
-      is_sorted_executors_v1
-      uninitialized_copy_executors_v1
-     )
-endif()
-
-if(HPX_WITH_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-  set(tests ${tests}
-      copyif_input
-     )
-endif()
-
 foreach(test ${tests})
   set(sources
       ${test}.cpp)
@@ -152,11 +141,6 @@ foreach(test ${tests})
   source_group("Source Files" FILES ${sources})
 
   set(folder_name "Tests/Unit/Parallel/Algorithms")
-  string(FIND ${test} "_v1" _is_v1_test)
-
-  if(NOT (_is_v1_test EQUAL -1))
-    set(folder_name "Tests/Unit/Parallel/Algorithms/V1")
-  endif()
 
   # add example executable
   add_hpx_executable(${test}_test
@@ -166,7 +150,7 @@ foreach(test ${tests})
                      HPX_PREFIX ${HPX_BUILD_PREFIX}
                      FOLDER ${folder_name})
 
-  add_hpx_unit_test("parallel" ${test} ${${test}_PARAMETERS})
+  add_hpx_unit_test("parallel.algorithms" ${test} ${${test}_PARAMETERS})
 
   # add a custom target for this example
   add_hpx_pseudo_target(tests.unit.parallel.algorithms.${test})
@@ -177,5 +161,5 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.unit.parallel.algorithms.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()

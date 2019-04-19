@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -9,7 +9,7 @@
 #include <hpx/config.hpp>
 #include <hpx/exception_fwd.hpp>
 #include <hpx/lcos/local/mutex.hpp>
-#include <hpx/performance_counters/counters.hpp>
+#include <hpx/performance_counters/counters_fwd.hpp>
 #include <hpx/performance_counters/performance_counter_set.hpp>
 #include <hpx/util/interval_timer.hpp>
 #include <hpx/util/itt_notify.hpp>
@@ -47,6 +47,7 @@ namespace hpx { namespace util
         void start_counters(error_code& ec = throws);
         void stop_counters(error_code& ec = throws);
         void reset_counters(error_code& ec = throws);
+        void reinit_counters(bool reset = true, error_code& ec = throws);
         bool evaluate_counters(bool reset = false,
             char const* description = nullptr, error_code& ec = throws);
 

@@ -45,7 +45,8 @@ namespace hpx { namespace threads { namespace executors { namespace detail
         // held.
         util::force_error_on_lock();
 
-        return threads::thread_result_type(threads::terminated, nullptr);
+        return threads::thread_result_type(threads::terminated,
+            threads::invalid_thread_id);
     }
 
     // Schedule the specified function for execution in this executor.
@@ -53,13 +54,15 @@ namespace hpx { namespace threads { namespace executors { namespace detail
     // situations.
     void current_executor::add(
         closure_type&& f, util::thread_description const& desc,
-        threads::thread_state_enum initial_state,
-        bool run_now, threads::thread_stacksize stacksize, error_code& ec)
+        threads::thread_state_enum initial_state, bool run_now,
+        threads::thread_stacksize stacksize,
+        threads::thread_schedule_hint schedulehint,
+        error_code& ec)
     {
         // create a new thread
-        thread_init_data data(util::bind(
-            util::one_shot(&current_executor::thread_function_nullary),
-            std::move(f)), desc);
+        thread_init_data data(util::one_shot(util::bind(
+            &current_executor::thread_function_nullary,
+            std::move(f))), desc);
         data.stacksize = threads::get_stack_size(stacksize);
 
         threads::thread_id_type id = threads::invalid_thread_id;
@@ -77,9 +80,9 @@ namespace hpx { namespace threads { namespace executors { namespace detail
         threads::thread_stacksize stacksize, error_code& ec)
     {
         // create a new suspended thread
-        thread_init_data data(util::bind(
-            util::one_shot(&current_executor::thread_function_nullary),
-            std::move(f)), desc);
+        thread_init_data data(util::one_shot(util::bind(
+            &current_executor::thread_function_nullary,
+            std::move(f))), desc);
         data.stacksize = threads::get_stack_size(stacksize);
 
         threads::thread_id_type id = threads::invalid_thread_id;
@@ -90,7 +93,7 @@ namespace hpx { namespace threads { namespace executors { namespace detail
 
         // now schedule new thread for execution
         threads::detail::set_thread_state_timed(
-            *scheduler_base_, abs_time, id, ec);
+            *scheduler_base_, abs_time, id, nullptr, true, ec);
         if (ec) return;
 
         if (&ec != &throws)

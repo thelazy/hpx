@@ -39,7 +39,7 @@ namespace hpx { namespace util
             cmd_line_parsed_(false),
             info_printed_(false),
             version_printed_(false),
-            parse_terminate_(false)
+            parse_result_(0)
         {}
 
         int call(boost::program_options::options_description const& desc_cmdline,
@@ -66,13 +66,16 @@ namespace hpx { namespace util
         bool cmd_line_parsed_;
         bool info_printed_;
         bool version_printed_;
-        bool parse_terminate_;
+        int parse_result_;
 
     protected:
         bool handle_arguments(util::manage_config& cfgmap,
             boost::program_options::variables_map& vm,
             std::vector<std::string>& ini_config, std::size_t& node,
             bool initial = false);
+
+        void enable_logging_settings(boost::program_options::variables_map& vm,
+            std::vector<std::string>& ini_config);
 
         void store_command_line(int argc, char** argv);
         void store_unregistered_options(std::string const& cmd_name,
@@ -81,12 +84,13 @@ namespace hpx { namespace util
             boost::program_options::options_description const& help);
 
         void handle_attach_debugger();
+
+        std::vector<std::string> preprocess_config_settings(
+            int argc, char** argv);
     };
 
-#if defined(HPX_HAVE_HWLOC)
     void handle_print_bind(boost::program_options::variables_map const& vm,
         std::size_t num_threads);
-#endif
 
     void handle_list_parcelports();
 }}

@@ -9,6 +9,7 @@
 #define HPX_PARALLEL_EXECUTORS_DEFAULT_EXECUTOR_AUG_24_2015_0624PM
 
 #include <hpx/config.hpp>
+#include <hpx/lcos/future.hpp>
 #include <hpx/parallel/executors/execution_parameters.hpp>
 #include <hpx/parallel/executors/thread_execution.hpp>
 #include <hpx/parallel/executors/thread_execution_information.hpp>
@@ -20,14 +21,5 @@ namespace hpx { namespace parallel { namespace execution
     /// Refers to the currently used base-executor
     using default_executor = threads::executors::default_executor;
 }}}
-
-#if defined(HPX_HAVE_EXECUTOR_COMPATIBILITY)
-#include <hpx/parallel/executors/v1/thread_executor_traits.hpp>
-
-namespace hpx { namespace parallel { inline namespace v3
-{
-    using default_executor = execution::default_executor;
-}}}
-#endif
 
 #endif

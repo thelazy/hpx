@@ -89,12 +89,9 @@ namespace hpx { namespace parallel { inline namespace v1
 
                 util::cancellation_token<> tok;
                 auto f1 =
-                    [pred, tok, policy](
-                        Iter part_begin, std::size_t part_count
-                    ) mutable -> bool
+                    [tok, HPX_CAPTURE_FORWARD(pred)](
+                        Iter part_begin, std::size_t part_count) mutable -> bool
                     {
-                        HPX_UNUSED(policy);
-
                         bool fst_bool = hpx::util::invoke(pred, *part_begin);
                         if (part_count == 1)
                             return fst_bool;
@@ -115,14 +112,16 @@ namespace hpx { namespace parallel { inline namespace v1
                         return fst_bool;
                     };
 
+                auto f2 =
+                    [tok](std::vector<hpx::future<bool>>&& results) -> bool {
+                    if (tok.was_cancelled())
+                        return false;
+                    return sequential_is_partitioned(std::move(results));
+                };
+
                 return util::partitioner<ExPolicy, bool>::call(
-                    std::forward<ExPolicy>(policy), first, count,
-                    std::move(f1),
-                    [tok](std::vector<hpx::future<bool> > && results) -> bool
-                    {
-                        if (tok.was_cancelled()) return false;
-                        return sequential_is_partitioned(std::move(results));
-                    });
+                    std::forward<ExPolicy>(policy), first, count, std::move(f1),
+                    std::move(f2));
             }
         };
         /// \endcond
@@ -185,22 +184,11 @@ namespace hpx { namespace parallel { inline namespace v1
     >::type
     is_partitioned(ExPolicy && policy, FwdIter first, FwdIter last, Pred && pred)
     {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-        static_assert(
-            (hpx::traits::is_input_iterator<FwdIter>::value),
-            "Requires at least input iterator.");
-
-        typedef std::integral_constant<bool,
-                execution::is_sequenced_execution_policy<ExPolicy>::value ||
-               !hpx::traits::is_forward_iterator<FwdIter>::value
-            > is_seq;
-#else
         static_assert(
             (hpx::traits::is_forward_iterator<FwdIter>::value),
             "Requires at least forward iterator.");
 
         typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
 
         return detail::is_partitioned<FwdIter>().call(
             std::forward<ExPolicy>(policy), is_seq(), first, last,

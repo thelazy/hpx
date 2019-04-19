@@ -11,6 +11,7 @@ set(tests
     async_callback_non_deduced_context
     async_unwrap_1037
     barrier_hang
+    barrier_3792
     broadcast_unwrap_future_2885
     broadcast_wait_for_2822
     call_promise_get_gid_more_than_once
@@ -48,6 +49,7 @@ set(tests
     shared_future_then_2166
     shared_mutex_1702
     shared_stated_leaked_1211
+    shared_future_then_with_executor_3634
     sliding_semaphore_2338
     split_future_2246
     wait_all_hang_1946
@@ -63,10 +65,11 @@ set(after_588_PARAMETERS LOCALITIES 2)
 set(async_action_1813_PARAMETERS LOCALITIES 2)
 set(async_callback_with_bound_callback_PARAMETERS LOCALITIES 2)
 set(async_callback_non_deduced_context_PARAMETERS THREADS_PER_LOCALITY 4)
+set(barrier_3792_PARAMETERS LOCALITIES 3 THREADS_PER_LOCALITY 1)
 set(broadcast_unwrap_future_2885_PARAMETERS LOCALITIES 2 THREADS_PER_LOCALITY 4)
 set(broadcast_wait_for_2822_PARAMETERS LOCALITIES 2 THREADS_PER_LOCALITY 4)
 set(channel_2916_FLAGS DEPENDENCIES iostreams_component)
-set(channel_2916_PARAMETERS LOCALITIES 2 THREADS_PER_LOCALITY 4)
+set(channel_2916_PARAMETERS THREADS_PER_LOCALITY 4)
 set(future_hang_on_get_629_PARAMETERS LOCALITIES 2 THREADS_PER_LOCALITY 2)
 set(dataflow_future_swap2_FLAGS DEPENDENCIES iostreams_component)
 set(dataflow_launch_775_PARAMETERS THREADS_PER_LOCALITY 2)
@@ -111,7 +114,7 @@ foreach(test ${tests})
 
   # add dependencies to pseudo-target
   add_hpx_pseudo_dependencies(tests.regressions.lcos_dir.${test}
-                              ${test}_test_exe)
+                              ${test}_test)
 endforeach()
 
 add_hpx_test(
@@ -123,12 +126,21 @@ add_hpx_test(
 # compile only tests
 if(HPX_WITH_COMPILE_ONLY_TESTS)
   set(compile_tests
-      fail_future_2667
+      dataflow_future_ref_3639
       future_range_ambiguity_2032
       wait_all_std_array_2035
      )
 
-  set(fail_future_2667_FLAGS FAILURE_EXPECTED)
+  if(HPX_WITH_FAIL_COMPILE_TESTS)
+    set(fail_compile_tests
+        fail_future_2667
+       )
+    foreach(fail_compile_test ${fail_compile_tests})
+      set(${fail_compile_test}_FLAGS FAILURE_EXPECTED)
+    endforeach()
+
+    set(compile_tests ${compile_tests} ${fail_compile_tests})
+  endif()
 
   foreach(compile_test ${compile_tests})
     set(sources

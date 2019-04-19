@@ -4,7 +4,7 @@
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
 #include <hpx/runtime/threads/executors/thread_pool_os_executors.hpp>
-#include <hpx/runtime/threads/detail/thread_pool_base.hpp>
+#include <hpx/runtime/threads/thread_pool_base.hpp>
 
 #if defined(HPX_HAVE_LOCAL_SCHEDULER)
 #include <hpx/runtime/threads/policies/local_queue_scheduler.hpp>
@@ -131,7 +131,8 @@ namespace hpx { namespace threads { namespace executors { namespace detail
         // execute the actual thread function
         func();
 
-        return threads::thread_result_type(threads::terminated, nullptr);
+        return threads::thread_result_type(threads::terminated,
+            threads::invalid_thread_id);
     }
 
     // Return the requested policy element
@@ -161,13 +162,15 @@ namespace hpx { namespace threads { namespace executors { namespace detail
     template <typename Scheduler>
     void thread_pool_os_executor<Scheduler>::add(closure_type && f,
         util::thread_description const& desc,
-        threads::thread_state_enum initial_state,
-        bool run_now, threads::thread_stacksize stacksize, error_code& ec)
+        threads::thread_state_enum initial_state, bool run_now,
+        threads::thread_stacksize stacksize,
+        threads::thread_schedule_hint schedulehint,
+        error_code& ec)
     {
         // create a new thread
-        thread_init_data data(util::bind(
-            util::one_shot(&thread_pool_os_executor::thread_function_nullary),
-            std::move(f)), desc);
+        thread_init_data data(util::one_shot(util::bind(
+            &thread_pool_os_executor::thread_function_nullary,
+            std::move(f))), desc);
         data.stacksize = threads::get_stack_size(stacksize);
 
         threads::thread_id_type id = threads::invalid_thread_id;
@@ -190,9 +193,9 @@ namespace hpx { namespace threads { namespace executors { namespace detail
         threads::thread_stacksize stacksize, error_code& ec)
     {
         // create a new suspended thread
-        thread_init_data data(util::bind(
-            util::one_shot(&thread_pool_os_executor::thread_function_nullary),
-            std::move(f)), desc);
+        thread_init_data data(util::one_shot(util::bind(
+            &thread_pool_os_executor::thread_function_nullary,
+            std::move(f))), desc);
         data.stacksize = threads::get_stack_size(stacksize);
 
         threads::thread_id_type id = threads::invalid_thread_id;

@@ -9,6 +9,7 @@
 #include <hpx/config.hpp>
 #include <hpx/async.hpp>
 #include <hpx/lcos/base_lco_with_value.hpp>
+#include <hpx/lcos/broadcast.hpp>
 #include <hpx/runtime/actions/component_action.hpp>
 #include <hpx/runtime/agas/symbol_namespace.hpp>
 #include <hpx/runtime/agas/server/symbol_namespace.hpp>
@@ -17,6 +18,7 @@
 #include <hpx/util/jenkins_hash.hpp>
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,9 +27,8 @@ using hpx::components::component_agas_symbol_namespace;
 
 using hpx::agas::server::symbol_namespace;
 
-HPX_REGISTER_COMPONENT(
-    hpx::components::fixed_component<symbol_namespace>,
-    symbol_namespace, hpx::components::factory_enabled)
+HPX_DEFINE_COMPONENT_NAME(symbol_namespace,
+    hpx_symbol_namespace);
 HPX_DEFINE_GET_COMPONENT_TYPE_STATIC(
     symbol_namespace, component_agas_symbol_namespace)
 
@@ -61,8 +62,8 @@ HPX_REGISTER_ACTION_ID(
     symbol_namespace_statistics_counter_action,
     hpx::actions::symbol_namespace_statistics_counter_action_id)
 
-namespace hpx { namespace agas {
-
+namespace hpx { namespace agas
+{
     naming::gid_type symbol_namespace::get_service_instance(
         std::uint32_t service_locality_id)
     {
@@ -79,7 +80,7 @@ namespace hpx { namespace agas {
             HPX_THROWS_IF(ec, bad_parameter,
                 "symbol_namespace::get_service_instance",
                 hpx::util::format(
-                    "can't retrieve a valid locality id from global address (%1%): ",
+                    "can't retrieve a valid locality id from global address ({1}): ",
                     dest));
             return naming::gid_type();
         }
@@ -121,7 +122,7 @@ namespace hpx { namespace agas {
     {
         return naming::address(
             hpx::get_locality(),
-            server::symbol_namespace::get_component_type(),
+            components::component_agas_symbol_namespace,
             this->ptr()
         );
     }
@@ -155,7 +156,7 @@ namespace hpx { namespace agas {
         return action(std::move(dest), std::move(key), std::move(gid));
     }
 
-    hpx::future<naming::id_type> symbol_namespace::resolve_async(std::string key)
+    hpx::future<naming::id_type> symbol_namespace::resolve_async(std::string key) const
     {
         naming::id_type dest = symbol_namespace_locality(key);
         if (naming::get_locality_from_gid(dest.get_gid()) == hpx::get_locality())
@@ -173,7 +174,7 @@ namespace hpx { namespace agas {
         return hpx::async(action, std::move(dest), std::move(key));
     }
 
-    naming::id_type symbol_namespace::resolve(std::string key)
+    naming::id_type symbol_namespace::resolve(std::string key) const
     {
         return resolve_async(std::move(key)).get();
     }
@@ -217,7 +218,63 @@ namespace hpx { namespace agas {
         return hpx::async(
             action, std::move(dest), name, call_for_past_events, std::move(lco));
     }
+}}
 
+typedef symbol_namespace::iterate_action iterate_action;
+HPX_REGISTER_BROADCAST_ACTION_DECLARATION(iterate_action);
+HPX_REGISTER_BROADCAST_ACTION(iterate_action);
+
+namespace hpx { namespace agas
+{
+    hpx::future<symbol_namespace::iterate_names_return_type>
+        symbol_namespace::iterate_async(std::string const& pattern) const
+    {
+        using return_type = server::symbol_namespace::iterate_names_return_type;
+
+        auto localities = hpx::find_all_localities();
+        std::vector<hpx::id_type> symbol_services;
+        symbol_services.reserve(localities.size());
+
+        for (auto const& locality : localities)
+        {
+            auto gid = get_service_instance(
+                naming::get_locality_id_from_id(locality));
+            symbol_services.push_back(hpx::id_type(gid, hpx::id_type::unmanaged));
+        }
+
+        hpx::future<std::vector<return_type> > f =
+            lcos::broadcast<iterate_action>(symbol_services, pattern);
+
+        return f.then(
+            [](hpx::future<std::vector<return_type> > && f)
+            {
+                std::vector<return_type> && data = f.get();
+                std::map<std::string, hpx::id_type> result;
+
+                for (auto && d : data)
+                {
+                    for (auto && e : d)
+                    {
+                        bool has_credits = naming::detail::has_credits(e.second);
+                        result[std::move(e.first)] =
+                            hpx::id_type(std::move(e.second),
+                                has_credits ?
+                                    naming::id_type::managed :
+                                    naming::id_type::unmanaged);
+                    }
+                }
+
+                return result;
+            });
+    }
+
+    symbol_namespace::iterate_names_return_type symbol_namespace::iterate(
+        std::string const& pattern) const
+    {
+        return iterate_async(pattern).get();
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
     void symbol_namespace::register_counter_types()
     {
         server::symbol_namespace::register_counter_types();

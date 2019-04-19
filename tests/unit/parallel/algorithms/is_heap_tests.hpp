@@ -13,12 +13,17 @@
 #include <iostream>
 #include <iterator>
 #include <numeric>
+#include <random>
 #include <string>
 #include <vector>
 
 #include "test_utils.hpp"
 
 ///////////////////////////////////////////////////////////////////////////////
+int seed = std::random_device{}();
+std::mt19937 gen(seed);
+std::uniform_int_distribution<> dis(0,10006);
+
 struct throw_always
 {
     template <typename T1, typename T2>
@@ -57,7 +62,8 @@ struct user_defined_type
         static const std::vector<std::string> name_list = {
             "ABB", "ABC", "ACB", "BCA", "CAA", "CAAA", "CAAB"
         };
-        name = name_list[std::rand() % name_list.size()];
+        std::uniform_int_distribution<> dist(0,name_list.size()-1);
+        name = name_list[dist(gen)];
         ++val;
         return *this;
     }
@@ -67,8 +73,8 @@ struct user_defined_type
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-template <typename ExPolicy, typename IteratorTag, typename DataType = int>
-void test_is_heap(ExPolicy policy, IteratorTag, DataType = DataType(),
+template <typename ExPolicy, typename IteratorTag, typename DataType>
+void test_is_heap(ExPolicy policy, IteratorTag, DataType,
     bool test_for_is_heap = true)
 {
     static_assert(
@@ -79,9 +85,9 @@ void test_is_heap(ExPolicy policy, IteratorTag, DataType = DataType(),
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<DataType> c(10007);
-    std::iota(std::begin(c), std::end(c), DataType(std::rand()));
+    std::iota(std::begin(c), std::end(c), DataType(gen()));
 
-    auto heap_end_iter = std::next(std::begin(c), std::rand() % c.size());
+    auto heap_end_iter = std::next(std::begin(c), dis(gen));
     std::make_heap(std::begin(c), heap_end_iter);
 
     if (test_for_is_heap)
@@ -114,9 +120,9 @@ void test_is_heap_with_pred(ExPolicy policy, IteratorTag, DataType, Pred pred,
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<DataType> c(10007);
-    std::iota(std::begin(c), std::end(c), DataType(std::rand()));
+    std::iota(std::begin(c), std::end(c), DataType(gen()));
 
-    auto heap_end_iter = std::next(std::begin(c), std::rand() % c.size());
+    auto heap_end_iter = std::next(std::begin(c), dis(gen));
     std::make_heap(std::begin(c), heap_end_iter);
 
     if (test_for_is_heap)
@@ -137,8 +143,8 @@ void test_is_heap_with_pred(ExPolicy policy, IteratorTag, DataType, Pred pred,
     }
 }
 
-template <typename ExPolicy, typename IteratorTag, typename DataType = int>
-void test_is_heap_async(ExPolicy policy, IteratorTag, DataType = DataType(),
+template <typename ExPolicy, typename IteratorTag, typename DataType>
+void test_is_heap_async(ExPolicy policy, IteratorTag, DataType,
     bool test_for_is_heap = true)
 {
     static_assert(
@@ -149,9 +155,9 @@ void test_is_heap_async(ExPolicy policy, IteratorTag, DataType = DataType(),
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<DataType> c(10007);
-    std::iota(std::begin(c), std::end(c), std::rand());
+    std::iota(std::begin(c), std::end(c), gen());
 
-    auto heap_end_iter = std::next(std::begin(c), std::rand() % c.size());
+    auto heap_end_iter = std::next(std::begin(c), dis(gen));
     std::make_heap(std::begin(c), heap_end_iter);
 
     if (test_for_is_heap)
@@ -187,7 +193,7 @@ void test_is_heap_exception(ExPolicy policy, IteratorTag,
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<int> c(10007);
-    std::iota(std::begin(c), std::end(c), std::rand());
+    std::iota(std::begin(c), std::end(c), gen());
     std::make_heap(std::begin(c), std::end(c));
 
     bool caught_exception = false;
@@ -226,7 +232,7 @@ void test_is_heap_exception_async(ExPolicy policy, IteratorTag,
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<int> c(10007);
-    std::iota(std::begin(c), std::end(c), std::rand());
+    std::iota(std::begin(c), std::end(c), gen());
     std::make_heap(std::begin(c), std::end(c));
 
     bool caught_exception = false;
@@ -276,7 +282,7 @@ void test_is_heap_bad_alloc(ExPolicy policy, IteratorTag,
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<int> c(10007);
-    std::iota(std::begin(c), std::end(c), std::rand());
+    std::iota(std::begin(c), std::end(c), gen());
     std::make_heap(std::begin(c), std::end(c));
 
     bool caught_bad_alloc = false;
@@ -314,7 +320,7 @@ void test_is_heap_bad_alloc_async(ExPolicy policy, IteratorTag,
     typedef test::test_iterator<base_iterator, IteratorTag> iterator;
 
     std::vector<int> c(10007);
-    std::iota(std::begin(c), std::end(c), std::rand());
+    std::iota(std::begin(c), std::end(c), gen());
     std::make_heap(std::begin(c), std::end(c));
 
     bool caught_bad_alloc = false;
@@ -356,9 +362,9 @@ void test_is_heap(bool test_for_is_heap = true)
 {
     using namespace hpx::parallel;
 
-    test_is_heap(execution::seq, IteratorTag(), test_for_is_heap);
-    test_is_heap(execution::par, IteratorTag(), test_for_is_heap);
-    test_is_heap(execution::par_unseq, IteratorTag(), test_for_is_heap);
+    test_is_heap(execution::seq, IteratorTag(), int(), test_for_is_heap);
+    test_is_heap(execution::par, IteratorTag(), int(), test_for_is_heap);
+    test_is_heap(execution::par_unseq, IteratorTag(), int(), test_for_is_heap);
 
     test_is_heap(execution::seq, IteratorTag(), user_defined_type(),
         test_for_is_heap);
@@ -374,9 +380,9 @@ void test_is_heap(bool test_for_is_heap = true)
     test_is_heap_with_pred(execution::par_unseq, IteratorTag(), int(),
         std::greater_equal<int>(), test_for_is_heap);
 
-    test_is_heap_async(execution::seq(execution::task), IteratorTag(),
+    test_is_heap_async(execution::seq(execution::task), IteratorTag(), int(),
         test_for_is_heap);
-    test_is_heap_async(execution::par(execution::task), IteratorTag(),
+    test_is_heap_async(execution::par(execution::task), IteratorTag(), int(),
         test_for_is_heap);
 
     test_is_heap_async(execution::seq(execution::task), IteratorTag(),

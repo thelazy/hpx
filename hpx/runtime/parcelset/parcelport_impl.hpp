@@ -21,14 +21,15 @@
 #include <hpx/throw_exception.hpp>
 #include <hpx/util/assert.hpp>
 #include <hpx/util/atomic_count.hpp>
-#include <hpx/util/bind.hpp>
+#include <hpx/util/bind_front.hpp>
 #include <hpx/util/connection_cache.hpp>
+#include <hpx/util/deferred_call.hpp>
 #include <hpx/util/detail/yield_k.hpp>
 #include <hpx/util/io_service_pool.hpp>
 #include <hpx/util/runtime_configuration.hpp>
 #include <hpx/util/safe_lexical_cast.hpp>
 
-#include <boost/detail/endian.hpp>
+#include <boost/predef/other/endian.h>
 
 #include <atomic>
 #include <chrono>
@@ -104,24 +105,24 @@ namespace hpx { namespace parcelset
     public:
         /// Construct the parcelport on the given locality.
         parcelport_impl(util::runtime_configuration const& ini,
-            locality const & here,
-            util::function_nonser<void(std::size_t, char const*)> const& on_start_thread,
-            util::function_nonser<void()> const& on_stop_thread)
+            locality const& here,
+            util::function_nonser<void(std::size_t, char const*)> const&
+                on_start_thread,
+            util::function_nonser<void(std::size_t, char const*)> const&
+                on_stop_thread)
           : parcelport(ini, here, connection_handler_type())
-          , io_service_pool_(thread_pool_size(ini),
-                on_start_thread, on_stop_thread, pool_name(), pool_name_postfix())
-          , connection_cache_(max_connections(ini), max_connections_per_loc(ini))
+          , io_service_pool_(thread_pool_size(ini), on_start_thread,
+                on_stop_thread, pool_name(), pool_name_postfix())
+          , connection_cache_(
+                max_connections(ini), max_connections_per_loc(ini))
           , archive_flags_(0)
           , operations_in_flight_(0)
           , num_thread_(0)
           , max_background_thread_(hpx::util::safe_lexical_cast<std::size_t>(
-                hpx::get_config_entry(
-                    "hpx.max_background_threads",
-                        (std::numeric_limits<std::size_t>::max)()
-                )
-            ))
+                hpx::get_config_entry("hpx.max_background_threads",
+                    (std::numeric_limits<std::size_t>::max)())))
         {
-#ifdef BOOST_BIG_ENDIAN
+#if BOOST_ENDIAN_BIG_BYTE
             std::string endian_out = get_config_entry("hpx.parcel.endian_out", "big");
 #else
             std::string endian_out = get_config_entry("hpx.parcel.endian_out", "little");
@@ -144,12 +145,12 @@ namespace hpx { namespace parcelset
             }
         }
 
-        ~parcelport_impl()
+        ~parcelport_impl() override
         {
             connection_cache_.clear();
         }
 
-        bool can_bootstrap() const
+        bool can_bootstrap() const override
         {
             return
                 connection_handler_traits<
@@ -157,7 +158,7 @@ namespace hpx { namespace parcelset
                 >::send_early_parcel::value;
         }
 
-        bool run(bool blocking = true)
+        bool run(bool blocking = true) override
         {
             io_service_pool_.run(false);    // start pool
 
@@ -169,7 +170,7 @@ namespace hpx { namespace parcelset
             return success;
         }
 
-        void flush_parcels()
+        void flush_parcels() override
         {
             // We suspend our thread, which will make progress on the network
             if(threads::get_self_ptr())
@@ -191,31 +192,36 @@ namespace hpx { namespace parcelset
             }
         }
 
-        void stop(bool blocking = true)
+        void stop(bool blocking = true) override
         {
             flush_parcels();
 
-            io_service_pool_.stop();
             if (blocking) {
                 connection_cache_.shutdown();
                 connection_handler().do_stop();
+                io_service_pool_.wait();
+                io_service_pool_.stop();
                 io_service_pool_.join();
                 connection_cache_.clear();
                 io_service_pool_.clear();
             }
-
+            else
+            {
+                io_service_pool_.stop();
+            }
         }
 
     public:
-        void put_parcel(locality const & dest, parcel p, write_handler_type f)
+        void put_parcel(
+            locality const& dest, parcel p, write_handler_type f) override
         {
             HPX_ASSERT(dest.type() == type());
 
             // We create a shared pointer of the parcels_await object since it
             // needs to be kept alive as long as there are futures not ready
-            // or GIDs to be split. This is necessary to preserve the identiy
+            // or GIDs to be split. This is necessary to preserve the identity
             // of the this pointer.
-            std::make_shared<detail::parcel_await>(std::move(p), std::move(f),
+            detail::parcel_await_apply(std::move(p), std::move(f),
                 archive_flags_, [this, dest](parcel&& p, write_handler_type&& f)
                 {
                     if (connection_handler_traits<ConnectionHandler>::
@@ -232,11 +238,11 @@ namespace hpx { namespace parcelset
 
                         get_connection_and_send_parcels(dest);
                     }
-                })->apply();
+                });
         }
 
         void put_parcels(locality const& dest, std::vector<parcel> parcels,
-            std::vector<write_handler_type> handlers)
+            std::vector<write_handler_type> handlers) override
         {
             if (parcels.size() != handlers.size())
             {
@@ -256,9 +262,9 @@ namespace hpx { namespace parcelset
 #endif
             // We create a shared pointer of the parcels_await object since it
             // needs to be kept alive as long as there are futures not ready
-            // or GIDs to be split. This is necessary to preserve the identiy
+            // or GIDs to be split. This is necessary to preserve the identity
             // of the this pointer.
-            std::make_shared<detail::parcels_await>(std::move(parcels),
+            detail::parcels_await_apply(std::move(parcels),
                 std::move(handlers), archive_flags_,
                 [this, dest](std::vector<parcel>&& parcels,
                     std::vector<write_handler_type>&& handlers)
@@ -278,22 +284,22 @@ namespace hpx { namespace parcelset
 
                         get_connection_and_send_parcels(dest);
                     }
-                })->apply();
+                });
         }
 
-        void send_early_parcel(locality const & dest, parcel p)
+        void send_early_parcel(locality const & dest, parcel p) override
         {
             send_early_parcel_impl<ConnectionHandler>(dest, std::move(p));
         }
 
-        util::io_service_pool* get_thread_pool(char const* name)
+        util::io_service_pool* get_thread_pool(char const* name) override
         {
             if (0 == std::strcmp(name, io_service_pool_.get_name()))
                 return &io_service_pool_;
             return nullptr;
         }
 
-        bool do_background_work(std::size_t num_thread)
+        bool do_background_work(std::size_t num_thread) override
         {
             trigger_pending_work();
             return do_background_work_impl<ConnectionHandler>(num_thread);
@@ -319,12 +325,14 @@ namespace hpx { namespace parcelset
             {
                 error_code ec(lightweight);
                 hpx::applier::register_thread_nullary(
-                    util::bind(
+                    util::deferred_call(
                         &parcelport_impl::remove_from_connection_cache,
                         this, loc),
                     "remove_from_connection_cache_delayed",
                     threads::pending, true, threads::thread_priority_normal,
-                    get_next_num_thread(), threads::thread_stacksize_default,
+                    threads::thread_schedule_hint(
+                        static_cast<std::int16_t>(get_next_num_thread())),
+                    threads::thread_stacksize_default,
                     ec);
                 if (!ec) return;
             }
@@ -332,27 +340,29 @@ namespace hpx { namespace parcelset
             connection_cache_.clear(loc);
         }
 
-        void remove_from_connection_cache(locality const& loc)
+        void remove_from_connection_cache(locality const& loc) override
         {
             error_code ec(lightweight);
             threads::thread_id_type id =
                 hpx::applier::register_thread_nullary(
-                    util::bind(
+                    util::deferred_call(
                         &parcelport_impl::remove_from_connection_cache_delayed,
                         this, loc),
                     "remove_from_connection_cache",
                     threads::suspended, true, threads::thread_priority_normal,
-                    get_next_num_thread(), threads::thread_stacksize_default,
+                    threads::thread_schedule_hint(
+                        static_cast<std::int16_t>(get_next_num_thread())),
+                    threads::thread_stacksize_default,
                     ec);
             if (ec) return;
 
-            threads::set_thread_state(id,
-                std::chrono::milliseconds(100), threads::pending,
-                threads::wait_signaled, threads::thread_priority_boost, ec);
+            threads::set_thread_state(id, std::chrono::milliseconds(100),
+                threads::pending, threads::wait_signaled,
+                threads::thread_priority_boost, true, ec);
         }
 
         /// Return the name of this locality
-        std::string get_locality_name() const
+        std::string get_locality_name() const override
         {
             return connection_handler().get_locality_name();
         }
@@ -360,7 +370,7 @@ namespace hpx { namespace parcelset
         ////////////////////////////////////////////////////////////////////////
         // Return the given connection cache statistic
         std::int64_t get_connection_cache_statistics(
-            connection_cache_statistics_type t, bool reset)
+            connection_cache_statistics_type t, bool reset) override
         {
             switch (t) {
                 case connection_cache_insertions:
@@ -410,12 +420,9 @@ namespace hpx { namespace parcelset
             put_parcel(
                 dest
               , std::move(p)
-              , util::bind(
-                    &parcelport::early_pending_parcel_handler
-                  , this
-                  , util::placeholders::_1
-                  , util::placeholders::_2
-                )
+              , [=](boost::system::error_code const& ec, parcel const & p) -> void {
+                    return early_pending_parcel_handler(ec, p);
+                }
             );
         }
 
@@ -883,7 +890,7 @@ namespace hpx { namespace parcelset
 #if defined(HPX_DEBUG)
             // verify the connection points to the right destination
 //            HPX_ASSERT(parcel_locality_id == sender_connection->destination());
-            sender_connection->verify(parcel_locality_id);
+            sender_connection->verify_(parcel_locality_id);
 #endif
             // encode the parcels
             std::size_t num_parcels = encode_parcels(*this, &parcels[0],
@@ -892,17 +899,14 @@ namespace hpx { namespace parcelset
                     this->get_max_outbound_message_size());
 
             using hpx::parcelset::detail::call_for_each;
-            using hpx::util::placeholders::_1;
-            using hpx::util::placeholders::_2;
-            using hpx::util::placeholders::_3;
             if (num_parcels == parcels.size())
             {
                 ++operations_in_flight_;
                 // send all of the parcels
                 sender_connection->async_write(
                     call_for_each(std::move(handlers), std::move(parcels)),
-                    util::bind(&parcelport_impl::send_pending_parcels_trampoline,
-                        this, _1, _2, _3));
+                    util::bind_front(&parcelport_impl::send_pending_parcels_trampoline,
+                        this));
             }
             else
             {
@@ -925,8 +929,8 @@ namespace hpx { namespace parcelset
                 sender_connection->async_write(
                     call_for_each(
                         std::move(handled_handlers), std::move(handled_parcels)),
-                    util::bind(&parcelport_impl::send_pending_parcels_trampoline,
-                        this, _1, _2, _3));
+                    util::bind_front(&parcelport_impl::send_pending_parcels_trampoline,
+                        this));
 
                 // give back unhandled parcels
                 parcels.erase(parcels.begin(), parcels.begin()+num_parcels);

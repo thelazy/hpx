@@ -48,6 +48,11 @@ bool register_name(
   , error_code& ec
     )
 {
+    if (&ec == &throws)
+    {
+        naming::resolver_client& agas_ = naming::get_agas_client();
+        return agas_.register_name(name, id);
+    }
     return register_name(name, id).get(ec);
 }
 
@@ -162,6 +167,13 @@ std::uint32_t get_num_overall_threads(
 {
     naming::resolver_client& agas_ = naming::get_agas_client();
     return agas_.get_num_overall_threads(ec);
+}
+
+std::string get_component_type_name(
+    components::component_type type, error_code& ec)
+{
+    naming::resolver_client& agas_ = naming::get_agas_client();
+    return agas_.get_component_type_name(type, ec);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -395,11 +407,17 @@ naming::gid_type get_next_id(
     )
 {
     runtime* rt = get_runtime_ptr();
-    if (rt == nullptr || rt->get_state() == state_invalid)
+    if (rt == nullptr)
     {
         HPX_THROWS_IF(ec, invalid_status,
             "get_next_id", "the runtime system has not been started yet.");
         return naming::invalid_gid;
+    }
+
+    // during bootstrap we use the id pool
+    if (rt->get_state() == state_invalid)
+    {
+        return rt->get_id_pool().get_id(count);
     }
 
     naming::resolver_client& agas_ = naming::get_agas_client();
@@ -483,24 +501,26 @@ hpx::future<hpx::id_type> on_symbol_namespace_event(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-hpx::future<std::pair<naming::id_type, naming::address> >
+hpx::future<std::pair<naming::id_type, naming::address>>
     begin_migration(naming::id_type const& id)
 {
     naming::resolver_client& resolver = naming::get_agas_client();
-    return resolver.begin_migration_async(id);
+    return resolver.begin_migration(id);
 }
 
-hpx::future<bool> end_migration(naming::id_type const& id)
+bool end_migration(naming::id_type const& id)
 {
     naming::resolver_client& resolver = naming::get_agas_client();
-    return resolver.end_migration_async(id);
+    return resolver.end_migration(id);
 }
 
 hpx::future<void> mark_as_migrated(naming::gid_type const& gid,
-    util::unique_function_nonser<std::pair<bool, hpx::future<void> >()> && f)
+    util::unique_function_nonser<std::pair<bool, hpx::future<void> >()> && f,
+    bool expect_to_be_marked_as_migrating)
 {
     naming::resolver_client& resolver = naming::get_agas_client();
-    return resolver.mark_as_migrated(gid, std::move(f));
+    return resolver.mark_as_migrated(
+        gid, std::move(f), expect_to_be_marked_as_migrating);
 }
 
 std::pair<bool, components::pinned_ptr>
@@ -515,6 +535,19 @@ void unmark_as_migrated(naming::gid_type const& gid)
 {
     naming::resolver_client& resolver = naming::get_agas_client();
     return resolver.unmark_as_migrated(gid);
+}
+
+hpx::future<symbol_namespace::iterate_names_return_type> find_symbols(
+    std::string const& pattern)
+{
+    naming::resolver_client& resolver = naming::get_agas_client();
+    return resolver.iterate_ids(pattern);
+}
+
+symbol_namespace::iterate_names_return_type find_symbols(
+    hpx::launch::sync_policy, std::string const& pattern)
+{
+    return find_symbols(pattern).get();
 }
 
 }}

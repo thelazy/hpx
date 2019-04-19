@@ -14,7 +14,6 @@
 #include <hpx/compat/thread.hpp>
 #include <hpx/exception.hpp>
 #include <hpx/util/assert.hpp>
-#include <hpx/util/bind.hpp>
 #include <hpx/util/io_service_pool.hpp>
 #include <hpx/util/logging.hpp>
 
@@ -30,18 +29,15 @@ namespace hpx { namespace util
 {
     io_service_pool::io_service_pool(std::size_t pool_size,
             on_startstop_func_type const& on_start_thread,
-            on_stop_func_type const& on_stop_thread,
+            on_startstop_func_type const& on_stop_thread,
             char const* pool_name, char const* name_postfix)
       : next_io_service_(0), stopped_(false),
         pool_size_(pool_size),
         on_start_thread_(on_start_thread),
-        on_stop_thread_(
-            [on_stop_thread](std::size_t, char const*) -> void
-            {
-                on_stop_thread();
-            }
-        ),
-        pool_name_(pool_name), pool_name_postfix_(name_postfix)
+        on_stop_thread_(on_stop_thread),
+        pool_name_(pool_name), pool_name_postfix_(name_postfix),
+        waiting_(false), wait_barrier_(pool_size + 1),
+        continue_barrier_(pool_size + 1)
     {
         LPROGRESS_ << pool_name;
 
@@ -64,31 +60,46 @@ namespace hpx { namespace util
 
     io_service_pool::io_service_pool(
             on_startstop_func_type const& on_start_thread,
-            on_stop_func_type const& on_stop_thread,
+            on_startstop_func_type const& on_stop_thread,
             char const* pool_name, char const* name_postfix)
       : next_io_service_(0), stopped_(false),
         pool_size_(0),
         on_start_thread_(on_start_thread),
-        on_stop_thread_(
-            [on_stop_thread](std::size_t, char const*) -> void
-            {
-                on_stop_thread();
-            }
-        ),
-        pool_name_(pool_name), pool_name_postfix_(name_postfix)
+        on_stop_thread_(on_stop_thread),
+        pool_name_(pool_name), pool_name_postfix_(name_postfix),
+        waiting_(false), wait_barrier_(1),
+        continue_barrier_(1)
     {
         LPROGRESS_ << pool_name;
     }
 
-    io_service_pool::io_service_pool(
-            on_startstop_func_type const& on_start_thread,
-            on_startstop_func_type const& on_stop_thread,
+    io_service_pool::io_service_pool(std::size_t pool_size,
             char const* pool_name, char const* name_postfix)
-      : next_io_service_(0), stopped_(false), pool_size_(0),
-        on_start_thread_(on_start_thread), on_stop_thread_(on_stop_thread),
-        pool_name_(pool_name), pool_name_postfix_(name_postfix)
+      : next_io_service_(0), stopped_(false),
+        pool_size_(pool_size),
+        on_start_thread_(),
+        on_stop_thread_(),
+        pool_name_(pool_name), pool_name_postfix_(name_postfix),
+        waiting_(false), wait_barrier_(pool_size + 1),
+        continue_barrier_(pool_size + 1)
     {
         LPROGRESS_ << pool_name;
+
+        if (pool_size == 0)
+        {
+            HPX_THROW_EXCEPTION(bad_parameter,
+                "io_service_pool::io_service_pool",
+                "io_service_pool size is 0");
+            return;
+        }
+
+        // Give all the io_services work to do so that their run() functions
+        // will not exit until they are explicitly stopped.
+        for (std::size_t i = 0; i < pool_size; ++i)
+        {
+            io_services_.emplace_back(new boost::asio::io_service);
+            work_.emplace_back(initialize_work(*io_services_[i]));
+        }
     }
 
     io_service_pool::~io_service_pool()
@@ -109,7 +120,20 @@ namespace hpx { namespace util
             on_start_thread_(index, pool_name_postfix_);
 
         // use this thread for the given io service
-        io_services_[index]->run();   // run io service
+        while (true)
+        {
+            io_services_[index]->run();   // run io service
+
+            if (waiting_)
+            {
+                wait_barrier_.wait();
+                continue_barrier_.wait();
+            }
+            else
+            {
+                break;
+            }
+        }
 
         if (on_stop_thread_)
             on_stop_thread_(index, pool_name_postfix_);
@@ -182,8 +206,8 @@ namespace hpx { namespace util
 
         for (std::size_t i = 0; i < num_threads; ++i)
         {
-            compat::thread t(util::bind(
-                &io_service_pool::thread_run, this, i, startup));
+            compat::thread t(
+                &io_service_pool::thread_run, this, i, startup);
             threads_.emplace_back(std::move(t));
         }
 
@@ -231,6 +255,32 @@ namespace hpx { namespace util
                 io_services_[i]->stop();
 
             stopped_ = true;
+        }
+    }
+
+    void io_service_pool::wait()
+    {
+        std::lock_guard<compat::mutex> l(mtx_);
+        wait_locked();
+    }
+
+    void io_service_pool::wait_locked()
+    {
+        if (!stopped_) {
+            // Clear work so that the run functions return when all work is done
+            waiting_ = true;
+            work_.clear();
+            wait_barrier_.wait();
+
+            // Add back the work guard and restart the services
+            waiting_ = false;
+            for (std::size_t i = 0; i < pool_size_; ++i)
+            {
+                work_.emplace_back(initialize_work(*io_services_[i]));
+                io_services_[i]->reset();
+            }
+
+            continue_barrier_.wait();
         }
     }
 

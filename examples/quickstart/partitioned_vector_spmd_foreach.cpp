@@ -65,7 +65,7 @@ public:
         // this view assumes that there is exactly one segment per locality
         typedef typename traits::local_segment_iterator local_segment_iterator;
         local_segment_iterator sit = segment_iterator_;
-        HPX_ASSERT(++sit == data.segment_end(hpx::get_locality_id()));
+        HPX_ASSERT(++sit == data.segment_end(hpx::get_locality_id())); // NOLINT
 #endif
     }
 
@@ -116,12 +116,11 @@ private:
 ///////////////////////////////////////////////////////////////////////////////
 int hpx_main(boost::program_options::variables_map& vm)
 {
-    unsigned int seed = (unsigned int)std::time(nullptr);
+    unsigned int seed = std::random_device{}();
     if (vm.count("seed"))
         seed = vm["seed"].as<unsigned int>();
 
     std::cout << "using seed: " << seed << std::endl;
-    std::srand(seed);
 
     unsigned int size = 10000;
     if (vm.count("size"))
@@ -155,8 +154,8 @@ int hpx_main(boost::program_options::variables_map& vm)
             f1.get();
         }
 
-        std::mt19937 gen(std::rand());
-        std::uniform_int_distribution<> dist;
+        std::mt19937 gen(seed);
+        std::uniform_int_distribution<> dist(0, 1000);
 
         // fill the vector with random numbers
         partitioned_vector_view<int> view(v);

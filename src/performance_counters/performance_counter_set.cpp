@@ -1,4 +1,4 @@
-//  Copyright (c) 2016-2017 Hartmut Kaiser
+//  Copyright (c) 2016-2018 Hartmut Kaiser
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
 //  file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -6,6 +6,7 @@
 #include <hpx/config.hpp>
 #include <hpx/error_code.hpp>
 #include <hpx/lcos/future.hpp>
+#include <hpx/performance_counters/counters.hpp>
 #include <hpx/performance_counters/performance_counter_set.hpp>
 #include <hpx/performance_counters/stubs/performance_counter.hpp>
 #include <hpx/runtime/get_locality_id.hpp>
@@ -29,6 +30,7 @@ namespace hpx { namespace performance_counters
     performance_counter_set::performance_counter_set(std::string const& name,
             bool reset)
       : invocation_count_(0)
+      , print_counters_locally_(false)
     {
         add_counters(name, reset);
     }
@@ -36,6 +38,7 @@ namespace hpx { namespace performance_counters
     performance_counter_set::performance_counter_set(
             std::vector<std::string> const& names, bool reset)
       : invocation_count_(0)
+      , print_counters_locally_(false)
     {
         add_counters(names, reset);
     }
@@ -88,7 +91,7 @@ namespace hpx { namespace performance_counters
             HPX_THROWS_IF(ec, bad_parameter,
                 "performance_counter_set::find_counter",
                 hpx::util::format(
-                    "unknown performance counter: '%1%' (%2%)",
+                    "unknown performance counter: '{1}' ({2})",
                     info.fullname_, ec.get_message()));
             return false;
         }
@@ -142,7 +145,7 @@ namespace hpx { namespace performance_counters
             util::expand(n);
 
             // find matching counter types
-            discover_counter_type(n, std::move(func), discover_counters_full, ec);
+            discover_counter_type(n, func, discover_counters_full, ec);
             if (ec) return;
         }
 
@@ -213,7 +216,7 @@ namespace hpx { namespace performance_counters
             return std::all_of(v.begin(), v.end(), [](bool val) { return val; });
         }
         catch (hpx::exception const& e) {
-            HPX_RETHROWS_IF(ec, e, "performance_counter_set::start");
+            HPX_RETHROWS_IF(ec, e, "performance_counter_set::stop");
             return false;
         }
     }
@@ -246,7 +249,41 @@ namespace hpx { namespace performance_counters
             hpx::util::unwrap(reset());
         }
         catch (hpx::exception const& e) {
-            HPX_RETHROWS_IF(ec, e, "performance_counter_set::start");
+            HPX_RETHROWS_IF(ec, e, "performance_counter_set::reset");
+        }
+    }
+
+    std::vector<hpx::future<void> > performance_counter_set::reinit(bool reset)
+    {
+        std::vector<hpx::id_type> ids;
+
+        {
+            std::unique_lock<mutex_type> l(mtx_);
+            ids = ids_;
+        }
+
+        std::vector<hpx::future<void> > v;
+        v.reserve(ids.size());
+
+        // re-initialize all performance counters
+        for (std::size_t i = 0; i != ids.size(); ++i)
+        {
+            using performance_counters::stubs::performance_counter;
+            v.push_back(
+                performance_counter::reinit(launch::async, ids[i], reset));
+        }
+
+        return v;
+    }
+
+    void performance_counter_set::reinit(
+        launch::sync_policy, bool reset, error_code& ec)
+    {
+        try {
+            hpx::util::unwrap(reinit(reset));
+        }
+        catch (hpx::exception const& e) {
+            HPX_RETHROWS_IF(ec, e, "performance_counter_set::reinit");
         }
     }
 
@@ -268,8 +305,11 @@ namespace hpx { namespace performance_counters
         // reset all performance counters
         for (std::size_t i = 0; i != ids.size(); ++i)
         {
-            if (infos_[i].type_ == counter_histogram)
+            if (infos_[i].type_ == counter_histogram ||
+                infos_[i].type_ == counter_raw_values)
+            {
                 continue;
+            }
 
             using performance_counters::stubs::performance_counter;
             v.push_back(performance_counter::get_value(
@@ -310,8 +350,11 @@ namespace hpx { namespace performance_counters
         // reset all performance counters
         for (std::size_t i = 0; i != ids.size(); ++i)
         {
-            if (infos_[i].type_ != counter_histogram)
+            if (infos_[i].type_ != counter_histogram &&
+                infos_[i].type_ != counter_raw_values)
+            {
                 continue;
+            }
 
             using performance_counters::stubs::performance_counter;
             v.push_back(performance_counter::get_values_array(

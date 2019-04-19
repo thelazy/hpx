@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2017 Hartmut Kaiser
+//  Copyright (c) 2007-2018 Hartmut Kaiser
 //  Copyright (c)      2011 Bryce Lelbach
 //
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -8,7 +8,6 @@
 #define HPX_APPLIER_APPLY_NOV_27_2008_0957AM
 
 #include <hpx/config.hpp>
-#include <hpx/runtime.hpp>
 #include <hpx/runtime/actions/action_priority.hpp>
 #include <hpx/runtime/agas/interface.hpp>
 #include <hpx/runtime/applier/apply_helper.hpp>
@@ -17,8 +16,9 @@
 #include <hpx/runtime/naming/address.hpp>
 #include <hpx/runtime/naming/id_type.hpp>
 #include <hpx/runtime/naming/name.hpp>
-#include <hpx/runtime/parcelset/put_parcel.hpp>
 #include <hpx/runtime/parcelset/detail/parcel_await.hpp>
+#include <hpx/runtime/parcelset/put_parcel.hpp>
+#include <hpx/runtime/parcelset_fwd.hpp>
 #include <hpx/traits/component_type_is_compatible.hpp>
 #include <hpx/traits/extract_action.hpp>
 #include <hpx/traits/is_action.hpp>
@@ -88,7 +88,7 @@ namespace hpx
         inline bool
         put_parcel_cb(naming::id_type const& id, naming::address&& addr,
             threads::thread_priority priority,
-            parcelset::parcelhandler::write_handler_type const& cb, Ts&&... vs)
+            parcelset::write_handler_type const& cb, Ts&&... vs)
         {
             typedef
                 typename hpx::traits::extract_action<Action>::type
@@ -106,7 +106,7 @@ namespace hpx
         inline bool
         put_parcel_cb(naming::id_type const& id, naming::address&& addr,
             threads::thread_priority priority,
-            parcelset::parcelhandler::write_handler_type && cb, Ts&&... vs)
+            parcelset::write_handler_type && cb, Ts&&... vs)
         {
             typedef
                 typename hpx::traits::extract_action<Action>::type
@@ -125,7 +125,7 @@ namespace hpx
         put_parcel_cont_cb(naming::id_type const& id,
             naming::address&& addr, threads::thread_priority priority,
             Continuation && cont,
-            parcelset::parcelhandler::write_handler_type const& cb, Ts&&... vs)
+            parcelset::write_handler_type const& cb, Ts&&... vs)
         {
             typedef
                 typename hpx::traits::extract_action<Action>::type
@@ -145,7 +145,7 @@ namespace hpx
         put_parcel_cont_cb(naming::id_type const& id,
             naming::address&& addr, threads::thread_priority priority,
             Continuation && cont,
-            parcelset::parcelhandler::write_handler_type && cb, Ts&&... vs)
+            parcelset::write_handler_type && cb, Ts&&... vs)
         {
             typedef
                 typename hpx::traits::extract_action<Action>::type
@@ -398,18 +398,17 @@ namespace hpx
             HPX_ASSERT(id.get_management_type() == naming::id_type::unmanaged);
             naming::gid_type gid = id.get_gid();
             parcelset::parcel p =
-                parcelset::detail::create_parcel::call(std::false_type(),
+                parcelset::detail::create_parcel::call(
                     std::move(gid), complement_addr<action_type_>(addr),
                     action_type_(), priority
                 );
 
-            parcelset::detail::parcel_await(std::move(p),
+            parcelset::detail::parcel_await_apply(std::move(p),
                 parcelset::write_handler_type(), 0,
                 [](parcelset::parcel&& p, parcelset::write_handler_type&&)
                 {
-                    hpx::get_runtime().get_parcel_handler()
-                        .sync_put_parcel(std::move(p));
-                }).apply();
+                    hpx::parcelset::sync_put_parcel(std::move(p));
+                });
             return false;     // destination is remote
         }
 
@@ -436,6 +435,12 @@ namespace hpx
                 typename action_type::component_type>::call(addr));
 
             threads::thread_init_data data;
+#ifdef HPX_HAVE_APEX
+            data.apex_data = hpx::util::apex_new_task(
+                data.description,
+                data.parent_locality_id,
+                data.parent_id);
+#endif
             apply_helper<action_type>::call(std::move(data),
                 std::forward<Continuation>(cont), target,
                 addr.address_, addr.type_, priority, std::forward<Ts>(vs)...);

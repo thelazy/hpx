@@ -114,7 +114,7 @@ void print_results(
         ;
 */
 
-    hpx::util::format_to(cout, "%lu %lu %lu %lu %lu %.14g",
+    hpx::util::format_to(cout, "{} {} {} {} {} {:.14g}",
         payload,
         os_thread_count,
         contexts,
@@ -128,7 +128,7 @@ void print_results(
     if (ac)
     {
         for (std::uint64_t i = 0; i < counter_shortnames.size(); ++i)
-            hpx::util::format_to(cout, " %.14g",
+            hpx::util::format_to(cout, " {:.14g}",
                 counter_values[i].get_value<double>());
     }
 */
@@ -143,7 +143,8 @@ struct kernel
     {
         worker_timed(payload * 1000);
 
-        return hpx::threads::thread_result_type(hpx::threads::pending, nullptr);
+        return hpx::threads::thread_result_type(hpx::threads::pending,
+            hpx::threads::invalid_thread_id);
     }
 
     bool operator!() const { return true; }
@@ -165,7 +166,7 @@ double perform_2n_iterations()
 
     for (std::uint64_t i = 0; i < contexts; ++i)
     {
-        coroutine_type* c = new coroutine_type(k);
+        coroutine_type* c = new coroutine_type(k, hpx::threads::invalid_thread_id);
         coroutines.push_back(c);
     }
 

@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "worker_timed.hpp"
 
@@ -60,19 +61,19 @@ void print_results(
                 "Total Walltime (seconds),Walltime per Task (seconds)\n"
              << flush;
 
-    std::string const cores_str = hpx::util::format("%lu,", cores);
-    std::string const seed_str  = hpx::util::format("%lu,", seed);
-    std::string const tasks_str = hpx::util::format("%lu,", tasks);
+    std::string const cores_str = hpx::util::format("{},", cores);
+    std::string const seed_str  = hpx::util::format("{},", seed);
+    std::string const tasks_str = hpx::util::format("{},", tasks);
 
     std::string const min_delay_str
-        = hpx::util::format("%lu,", min_delay);
+        = hpx::util::format("{},", min_delay);
     std::string const max_delay_str
-        = hpx::util::format("%lu,", max_delay);
+        = hpx::util::format("{},", max_delay);
     std::string const total_delay_str
-        = hpx::util::format("%lu,", total_delay);
+        = hpx::util::format("{},", total_delay);
 
     hpx::util::format_to(cout,
-        "%-21s %-21s %-21s %-21s %-21s %-21s %10.12s, %10.12s\n",
+        "{:-21} {:-21} {:-21} {:-21} {:-21} {:-21} {:10.12}, {:10.12}\n",
         cores_str, seed_str, tasks_str,
         min_delay_str, max_delay_str, total_delay_str,
         walltime, walltime / tasks) << flush;
@@ -183,10 +184,16 @@ int hpx_main(
             payloads.push_back(payload);
         }
 
+#if defined(HPX_HAVE_CXX11_STD_SHUFFLE)
+        std::random_device random_device;
+        std::mt19937 generator(random_device());
+        std::shuffle(payloads.begin(), payloads.end(), std::move(generator));
+#else
         // Randomly shuffle the entire sequence to deal with drift.
         using hpx::util::placeholders::_1;
         std::random_shuffle(payloads.begin(), payloads.end(),
             hpx::util::bind(&shuffler, std::ref(prng), _1));
+#endif
 
         ///////////////////////////////////////////////////////////////////////
         // Validate the payloads.

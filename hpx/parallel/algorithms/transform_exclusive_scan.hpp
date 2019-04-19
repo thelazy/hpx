@@ -121,13 +121,11 @@ namespace hpx { namespace parallel { inline namespace v1
                 using hpx::util::make_zip_iterator;
 
                 auto f3 =
-                    [op, policy](
+                    [op](
                         zip_iterator part_begin, std::size_t part_size,
                         hpx::shared_future<T> curr, hpx::shared_future<T> next
                     ) -> void
                     {
-                        HPX_UNUSED(policy);
-
                         next.get();     // rethrow exceptions
 
                         T val = curr.get();
@@ -178,21 +176,6 @@ namespace hpx { namespace parallel { inline namespace v1
         transform_exclusive_scan_(ExPolicy && policy, FwdIter1 first, FwdIter1 last,
             FwdIter2 dest, Conv && conv, T init, Op && op, std::false_type)
         {
-#if defined(HPX_HAVE_ALGORITHM_INPUT_ITERATOR_SUPPORT)
-            static_assert(
-                (hpx::traits::is_input_iterator<FwdIter1>::value),
-                "Requires at least input iterator.");
-            static_assert(
-                (hpx::traits::is_output_iterator<FwdIter2>::value ||
-                    hpx::traits::is_forward_iterator<FwdIter2>::value),
-                "Requires at least output iterator.");
-
-            typedef std::integral_constant<bool,
-                    is_sequenced_execution_policy<ExPolicy>::value ||
-                   !hpx::traits::is_forward_iterator<FwdIter1>::value ||
-                   !hpx::traits::is_forward_iterator<FwdIter2>::value
-                > is_seq;
-#else
             static_assert(
                 (hpx::traits::is_forward_iterator<FwdIter1>::value),
                 "Requires at least forward iterator.");
@@ -200,8 +183,7 @@ namespace hpx { namespace parallel { inline namespace v1
                 (hpx::traits::is_forward_iterator<FwdIter2>::value),
                 "Requires at least forward iterator.");
 
-            typedef is_sequenced_execution_policy<ExPolicy> is_seq;
-#endif
+            typedef execution::is_sequenced_execution_policy<ExPolicy> is_seq;
 
             return detail::transform_exclusive_scan<FwdIter2>().call(
                 std::forward<ExPolicy>(policy), is_seq(),
@@ -317,7 +299,7 @@ namespace hpx { namespace parallel { inline namespace v1
     template <typename ExPolicy, typename FwdIter1, typename FwdIter2,
         typename T, typename Op, typename Conv,
     HPX_CONCEPT_REQUIRES_(
-        is_execution_policy<ExPolicy>::value &&
+        execution::is_execution_policy<ExPolicy>::value &&
         hpx::traits::is_iterator<FwdIter1>::value &&
         hpx::traits::is_iterator<FwdIter2>::value &&
         hpx::traits::is_invocable<Conv,
@@ -340,38 +322,6 @@ namespace hpx { namespace parallel { inline namespace v1
             first, last, dest, std::forward<Conv>(conv), std::move(init),
             std::forward<Op>(op), is_segmented());
     }
-
-#if defined(HPX_HAVE_TRANSFORM_REDUCE_COMPATIBILITY)
-    /// \cond NOINTERNAL
-    template <typename ExPolicy, typename FwdIter1, typename FwdIter2,
-        typename T, typename Op, typename Conv,
-    HPX_CONCEPT_REQUIRES_(
-        is_execution_policy<ExPolicy>::value &&
-        hpx::traits::is_iterator<FwdIter1>::value &&
-        hpx::traits::is_iterator<FwdIter2>::value &&
-        hpx::traits::is_invocable<Conv,
-                typename std::iterator_traits<FwdIter1>::value_type
-            >::value &&
-        hpx::traits::is_invocable<Op,
-                typename hpx::util::invoke_result<Conv,
-                    typename std::iterator_traits<FwdIter1>::value_type
-                >::type,
-                typename hpx::util::invoke_result<Conv,
-                    typename std::iterator_traits<FwdIter1>::value_type
-                >::type
-            >::value)>
-    HPX_DEPRECATED(HPX_DEPRECATED_MSG)
-    typename util::detail::algorithm_result<ExPolicy, FwdIter2>::type
-    transform_exclusive_scan(ExPolicy && policy, FwdIter1 first, FwdIter1 last,
-        FwdIter2 dest, Conv && conv, T init, Op && op)
-    {
-        typedef hpx::traits::is_segmented_iterator<FwdIter1> is_segmented;
-        return detail::transform_exclusive_scan_(std::forward<ExPolicy>(policy),
-            first, last, dest, std::forward<Conv>(conv), std::move(init),
-            std::forward<Op>(op), is_segmented());
-    }
-    /// \endcond
-#endif
 }}}
 
 #endif
